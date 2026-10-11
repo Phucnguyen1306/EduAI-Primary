@@ -58,7 +58,7 @@ type ActiveTab =
   | "student_portal";
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<ActiveTab>("dashboard");
+  const [activeTab, setActiveTab] = useState<ActiveTab>("student_portal");
   const [assignments, setAssignments] = useState<Assignment[]>(INITIAL_ASSIGNMENTS);
   const [submissions, setSubmissions] = useState<StudentSubmission[]>(INITIAL_SUBMISSIONS);
   const [classesList, setClassesList] = useState<ClassRoom[]>(INITIAL_CLASSES);
