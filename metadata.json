@@ -1,0 +1,6 @@
+{
+  "name": "EduAI Primary — Quản lý & Chấm bài Tin học Thông minh",
+  "description": "EduAI Primary — Hệ thống Quản lý & Chấm bài Tin học Tiểu học (Lớp 3, 4, 5). Được tạo bởi ý tưởng phần mềm của Thầy Nguyễn Văn Phúc - Trường TH-THCS Vĩnh Phú, Phường Lái Thiêu, Thành phố Hồ Chí Minh. Năm học 2026-2027.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
