@@ -11,7 +11,7 @@ import {
   INITIAL_TT27_REGULAR_RECORDS,
   INITIAL_TT27_PERIODIC_RECORDS,
   LAST_CODE_SYNC_AT,
-} from "./src/data/initialData";
+} from "./src/data/initialData.ts";
 
 dotenv.config();
 
@@ -39,7 +39,7 @@ const liveSystemState = {
 
 function writeStateToInitialDataTs() {
   const initialDataPath = path.join(__dirname, "src", "data", "initialData.ts");
-  const fileContent = `import { Assignment, StudentSubmission } from "../types/grading";
+  const fileContent = `import type { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
 
 /**
@@ -73,7 +73,7 @@ export const INITIAL_TT27_PERIODIC_RECORDS: Record<string, any[]> = ${JSON.strin
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: "50mb" }));
 
@@ -1160,7 +1160,7 @@ Hãy phân tích từng học sinh theo đúng quy định tại Điều 7 Thôn
   } else {
     const distPath = path.join(__dirname, "dist");
     app.use(express.static(distPath));
-    app.get("*all", (_req, res) => {
+    app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

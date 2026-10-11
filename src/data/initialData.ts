@@ -1,4 +1,4 @@
-import { Assignment, StudentSubmission } from "../types/grading";
+import type { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
 
 /**
