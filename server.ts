@@ -254,8 +254,7 @@ ${gradeCurriculumBoundary ? `\n${gradeCurriculumBoundary}\n` : ""}
 
 [GHI CHÚ TRỌNG TÂM CỦA GIÁO VIÊN — BẮT BUỘC TUÂN THỦ 100%]:
 1. Phần kiến thức trọng tâm cần tập trung ra đề: ${focusKnowledgeNote || selectedTopicTitle || "Tập trung vào kiến thức trọng tâm của chủ đề đã chọn ở Bước 3."}
-2. Ý tưởng riêng của giáo viên: ${teacherCustomIdeaNote || "Thiết kế câu hỏi gắn liền với tình huống thực tế của học sinh tiểu học."}
-3. Yêu cầu ràng buộc: ${strictStep3Step4Rule}
+2. Yêu cầu ràng buộc: ${strictStep3Step4Rule}
 ${
   referenceDocText || referencePdfBase64
     ? `\nQUAN TRỌNG — TÀI LIỆU ĐÃ TẢI LÊN Ở BƯỚC 4 (${referenceDocType || "Ma trận / Sách PDF / Đề mẫu"} - Tệp: ${referenceFileName || "Văn bản trực tiếp"}):
@@ -266,7 +265,7 @@ ${referenceDocText ? `"""\n${referenceDocText.slice(0, 12000)}\n"""` : "(Xem to�
 Yêu cầu:
 - Bao gồm ĐÚNG ${targetMcqCount} câu hỏi trắc nghiệm (mỗi câu có 4 lựa chọn A, B, C, D) và ĐÚNG ${targetEssayCount} câu hỏi tự luận ngắn (để chấm bằng NLP đọc hiểu ý nghĩa, trả về trong mảng shortAnswers). Tổng điểm toàn bài = 10 điểm.
 - Mọi câu hỏi trắc nghiệm và tự luận phải CHỈ thuộc đúng Khối ${grade || "Lớp 4"} (Bước 1) và đúng chủ đề đã chọn ở Bước 3 ("${selectedTopicTitle}") cùng tài liệu Bước 4, tuyệt đối không lấy kiến thức của khối lớp khác hoặc bịa thêm kiến thức ngoài.
-- Thực hiện chính xác "Ý tưởng riêng của giáo viên" ở trên vào nội dung câu hỏi tương ứng (đặc biệt là các câu hỏi tình huống tự luận).
+- Phần nội dung câu hỏi (trường "question") CHỈ nêu trực tiếp nội dung câu hỏi, tuyệt đối KHÔNG ghi các nhãn tiền tố như "[Tin học 4 - Chủ đề 1]", "Câu 1:", hay "Câu hỏi tự luận tình huống:" ở đầu câu.
 - Ngôn từ trong sáng, gần gũi với học sinh tiểu học (${grade || "Lớp 4"}).
 - Mỗi câu tự luận ngắn cần có danh sách các cụm từ khóa đồng nghĩa (semanticKeywords) mà học sinh tiểu học hay diễn đạt theo cách riêng của các em.`;
 
@@ -412,8 +411,7 @@ Công nghệ chấm tự động sử dụng: ${engineName}.
 
 [GHI CHÚ TRỌNG TÂM CỦA GIÁO VIÊN — BẮT BUỘC TUÂN THỦ 100%]:
 1. Phần kiến thức trọng tâm cần tập trung ra đề: ${focusKnowledgeNote || selectedTopicTitle || "Tập trung vào kỹ năng trọng tâm của chủ đề Bước 3."}
-2. Ý tưởng riêng của giáo viên: ${teacherCustomIdeaNote || "Thiết kế yêu cầu gắn với tình huống thực hành thực tế của học sinh tiểu học."}
-3. Yêu cầu ràng buộc: ${strictStep3Step4Rule}
+2. Yêu cầu ràng buộc: ${strictStep3Step4Rule}
 ${
   referenceDocText || referencePdfBase64
     ? `\nQUAN TRỌNG — TÀI LIỆU ĐÃ TẢI LÊN Ở BƯỚC 4 (${referenceDocType || "Ma trận / Sách PDF / Đề mẫu"} - Tệp: ${referenceFileName || "Văn bản trực tiếp"}):
@@ -561,7 +559,6 @@ ${gradeCurriculumBoundary ? `\n${gradeCurriculumBoundary}\n` : ""}
 
 [GHI CHÚ TRỌNG TÂM CỦA GIÁO VIÊN — BẮT BUỘC TUÂN THỦ 100%]:
 - Phần kiến thức trọng tâm cần tập trung ra đề: ${focusKnowledgeNote || selectedTopicTitle || "Theo chủ đề đã chọn ở Bước 3 và ma trận đề."}
-- Ý tưởng riêng của giáo viên: ${teacherCustomIdeaNote || "Xây dựng câu hỏi tự luận và thực hành gắn liền với tình huống thực tế của học sinh tiểu học."}
 - Yêu cầu ràng buộc: ${strictStep3Step4Rule}
 ${
   referenceDocText || referencePdfBase64
@@ -581,10 +578,11 @@ BẠN PHẢI TUÂN THỦ NGHIÊM NGẶT 4 NGUYÊN TẮC SAU:
 
 2. NỘI DUNG CHUYÊN MÔN:
 - Nội dung câu hỏi bám sát 100% chương trình Tin học tiểu học của đúng ${grade} (đã chọn ở Bước 1) và đúng "${selectedTopicTitle}" (đã chọn ở Bước 3). Tuyệt đối không lấy bài học của khối khác.
+- Phần nội dung câu hỏi (trường "question") CHỈ nêu trực tiếp nội dung câu hỏi, tuyệt đối KHÔNG ghi các nhãn tiền tố như "[Tin học 4 - Chủ đề 1]", "Câu 1:", hay "Câu hỏi tự luận tình huống:" ở đầu câu.
 - Lời văn trong sáng, dễ hiểu, phù hợp với lứa tuổi học sinh tiểu học.
 
 3. HÌNH ẢNH MINH HỌA TRONG CÂU HỎI:
-- Đối với những câu hỏi cần hình ảnh minh họa (như nhận diện biểu tượng phần mềm, giao diện Paint, Word, PowerPoint, Scratch, phần cứng máy tính, nút lệnh, v.v.), bạn PHẢI điền trường "illustrationNote" bằng thẻ chuẩn: "[HÌNH ẢNH MINH HỌA: Mô tả chi tiết hình ảnh cần có]" (ít nhất 2-3 câu hỏi trắc nghiệm và bài thực hành có thẻ [HÌNH ẢNH MINH HỌA: ...] mô tả rõ ràng để giáo viên hoặc hệ thống dễ dàng chèn ảnh vào).
+- Đối với mỗi câu hỏi (nhận diện biểu tượng phần mềm, giao diện Paint, Word, PowerPoint, Scratch, phần cứng máy tính, nút lệnh, v.v.), bạn PHẢI điền trường "illustrationNote" mô tả ngắn gọn hình ảnh minh họa của câu hỏi đó để hệ thống tự động tạo hình ảnh minh họa.
 
 4. ĐẦU RA (OUTPUT):
 - Trình bày đề kiểm tra rõ ràng thành 2 phần: Phần I (Trắc nghiệm) và Phần II (Tự luận/Thực hành).

@@ -21,6 +21,9 @@ import {
   Image as ImageIcon,
   FileSpreadsheet,
   Calendar,
+  RefreshCw,
+  CheckSquare,
+  Square,
 } from "lucide-react";
 import {
   Assignment,
@@ -36,6 +39,13 @@ import {
   getDefaultStep4NotesForGradeAndTopic,
   getGradeAndTopicPureBank,
 } from "../utils/gradeCurriculumBank";
+import {
+  cleanIllustrationCaption,
+  cleanQuestionText,
+  enrichExamWithAutoIllustrations,
+  formatTargetClassesLabel,
+  generateIllustrationDataUrl,
+} from "../utils/examIllustrationEngine";
 import { ClassRoom } from "./ClassManagerView";
 
 function getGradeCurriculumBoundaryPrompt(grade: GradeLevel): string {
@@ -400,7 +410,7 @@ function getTopicPureBank(
   );
 }
 
-// Bộ sinh Đề Thi Học Kỳ chuẩn 4 nguyên tắc khảo thí Tiểu học (Bám sát Chủ đề Bước 3 & Tài liệu Bước 4)
+// Bộ sinh Đề Thi Học Kỳ chuẩn 4 nguyên tắc khảo thí Tiểu học (Bám sát các Chủ đề Bước 3 & Tài liệu Bước 4)
 function buildFallbackSemesterExam(params: {
   grade: GradeLevel;
   semesterType: "Học kỳ I" | "Học kỳ II" | "Giữa Học kỳ I" | "Giữa Học kỳ II";
@@ -416,6 +426,7 @@ function buildFallbackSemesterExam(params: {
   practiceCount: number;
   topicPrompt: string;
   topicObj?: KnttTopicConfig;
+  topicObjs?: KnttTopicConfig[];
   focusKnowledgeNote?: string;
   teacherCustomIdeaNote?: string;
   referenceDocText?: string;
@@ -436,12 +447,20 @@ function buildFallbackSemesterExam(params: {
     essayCount,
     practiceCount,
     topicObj = KNTT_CURRICULUM[grade]?.[0] || KNTT_CURRICULUM["Lớp 4"][0],
+    topicObjs,
     focusKnowledgeNote = "",
     teacherCustomIdeaNote = "",
     referenceDocText = "",
     referenceFileName = null,
     subtrackId = "5-common",
   } = params;
+
+  const activeTopics =
+    topicObjs && topicObjs.length > 0 ? topicObjs : [topicObj];
+  const combinedTopicsLabel =
+    activeTopics.length === 1
+      ? activeTopics[0].title
+      : activeTopics.map((t) => t.code).join(", ");
 
   const targetMcq = Math.min(20, Math.max(1, mcqCount));
   const targetEssay = Math.min(5, Math.max(0, essayCount));
@@ -457,26 +476,31 @@ function buildFallbackSemesterExam(params: {
   const ptPerEssay = targetEssay > 0 ? Number((essayPointsTotal / targetEssay).toFixed(2)) : 0;
   const ptPerPractice = Number((totalPracticePoints / targetPractice).toFixed(2));
 
-  const pureBank = getTopicPureBank(
-    grade,
-    topicObj,
-    focusKnowledgeNote,
-    teacherCustomIdeaNote,
-    referenceDocText,
-    referenceFileName,
-    subtrackId
+  const topicBanks = activeTopics.map((t) =>
+    getTopicPureBank(
+      grade,
+      t,
+      focusKnowledgeNote,
+      teacherCustomIdeaNote,
+      referenceDocText,
+      referenceFileName,
+      subtrackId
+    )
   );
 
   const multipleChoice = Array.from({ length: targetMcq }, (_, idx) => {
-    const item = pureBank.mcqs[idx % pureBank.mcqs.length];
+    const bank = topicBanks[idx % topicBanks.length];
+    const itemIdx = Math.floor(idx / topicBanks.length) % bank.mcqs.length;
+    const item = bank.mcqs[itemIdx];
+    const cleanQ = cleanQuestionText(item.question);
+    const note = cleanIllustrationCaption(item.illustrationNote) || cleanQ;
     return {
       id: `sem-mcq-${idx + 1}-${Date.now()}`,
-      question:
-        idx < pureBank.mcqs.length
-          ? item.question
-          : `[Câu ${idx + 1} - ${topicObj.code}] ${item.question}`,
+      question: cleanQ,
       cognitiveLevel: item.cognitiveLevel,
-      illustrationNote: item.illustrationNote,
+      illustrationNote: note,
+      illustrationImageDataUrl: generateIllustrationDataUrl(note, idx),
+      illustrationVariant: idx,
       options: item.options,
       correctIndex: item.correctIndex,
       explanation: item.explanation,
@@ -485,12 +509,18 @@ function buildFallbackSemesterExam(params: {
   });
 
   const shortAnswers = Array.from({ length: targetEssay }, (_, idx) => {
-    const sa = pureBank.essays[idx % pureBank.essays.length];
+    const bank = topicBanks[idx % topicBanks.length];
+    const saIdx = Math.floor(idx / topicBanks.length) % bank.essays.length;
+    const sa = bank.essays[saIdx];
+    const cleanQ = cleanQuestionText(sa.question);
+    const note = cleanIllustrationCaption(sa.illustrationNote) || cleanQ;
     return {
       id: `sem-sa-${idx + 1}-${Date.now()}`,
-      question: sa.question,
+      question: cleanQ,
       cognitiveLevel: sa.cognitiveLevel,
-      illustrationNote: sa.illustrationNote,
+      illustrationNote: note,
+      illustrationImageDataUrl: generateIllustrationDataUrl(note, idx),
+      illustrationVariant: idx,
       sampleAnswer: sa.sampleAnswer,
       gradingGuide: sa.gradingGuide,
       semanticKeywords: sa.semanticKeywords,
@@ -500,20 +530,28 @@ function buildFallbackSemesterExam(params: {
 
   const practiceTasks: SemesterPracticeTask[] = Array.from(
     { length: targetPractice },
-    (_, idx) => ({
-      id: `sem-prac-${idx + 1}-${Date.now()}`,
-      title: `Bài thực hành ${idx + 1}: ${pureBank.practiceTask.title}`,
-      cognitiveLevel: pureBank.practiceTask.cognitiveLevel,
-      softwareType: pureBank.practiceTask.softwareType,
-      instructions: pureBank.practiceTask.instructions,
-      illustrationNote: pureBank.practiceTask.illustrationNote,
-      points: ptPerPractice,
-      gradingRubric: pureBank.practiceTask.gradingRubric,
-    })
+    (_, idx) => {
+      const bank = topicBanks[idx % topicBanks.length];
+      const note =
+        cleanIllustrationCaption(bank.practiceTask.illustrationNote) ||
+        bank.practiceTask.title;
+      return {
+        id: `sem-prac-${idx + 1}-${Date.now()}`,
+        title: `Bài thực hành ${idx + 1}: ${bank.practiceTask.title}`,
+        cognitiveLevel: bank.practiceTask.cognitiveLevel,
+        softwareType: bank.practiceTask.softwareType,
+        instructions: bank.practiceTask.instructions,
+        illustrationNote: note,
+        illustrationImageDataUrl: generateIllustrationDataUrl(note, idx),
+        illustrationVariant: idx,
+        points: ptPerPractice,
+        gradingRubric: bank.practiceTask.gradingRubric,
+      };
+    }
   );
 
   const answerKeyLines = [
-    `I. ĐÁP ÁN PHẦN I — TRẮC NGHIỆM KHÁCH QUAN (${mcqPointsTotal.toFixed(2)} điểm — Bám sát ${topicObj.title}):`,
+    `I. ĐÁP ÁN PHẦN I — TRẮC NGHIỆM KHÁCH QUAN (${mcqPointsTotal.toFixed(2)} điểm — Bám sát ${combinedTopicsLabel}):`,
     ...multipleChoice.map(
       (q, i) =>
         `- Câu ${i + 1} [${q.cognitiveLevel}]: Đáp án đúng là ${
@@ -538,9 +576,9 @@ function buildFallbackSemesterExam(params: {
     ),
   ];
 
-  return {
+  return enrichExamWithAutoIllustrations({
     id: `sem-exam-${Date.now()}`,
-    title: `Đề Kiểm tra Định kỳ ${semesterType} Môn Tin học ${grade} — ${topicObj.title}${
+    title: `Đề Kiểm tra Định kỳ ${semesterType} Môn Tin học ${grade} — ${combinedTopicsLabel}${
       referenceFileName ? ` (Tài liệu: ${referenceFileName})` : ""
     }`,
     grade,
@@ -566,10 +604,10 @@ function buildFallbackSemesterExam(params: {
       practiceTasks,
       answerKeyAndGradingGuide: answerKeyLines.join("\n"),
     },
-  };
+  });
 }
 
-// Local fallback builder in case AI server is busy after 3 retries — Bám sát 100% Chủ đề Bước 3 & Tài liệu Bước 4
+// Local fallback builder in case AI server is busy after 3 retries — Bám sát 100% các Chủ đề Bước 3 & Tài liệu Bước 4
 function buildFallbackExam(
   grade: GradeLevel,
   topicTitle: string,
@@ -581,7 +619,8 @@ function buildFallbackExam(
   teacherCustomIdeaNote: string = "",
   referenceDocText: string = "",
   referenceFileName?: string | null,
-  subtrackId: string = "5-common"
+  subtrackId: string = "5-common",
+  topicObjs?: KnttTopicConfig[]
 ): TheoryExam {
   const targetCount = Math.min(20, Math.max(0, mcqCount));
   const targetEssayCount = Math.min(10, Math.max(0, essayCount));
@@ -593,14 +632,19 @@ function buildFallbackExam(
     ) ||
     (KNTT_CURRICULUM[grade] || KNTT_CURRICULUM["Lớp 4"])[0];
 
-  const pureBank = getTopicPureBank(
-    grade,
-    resolvedTopicObj,
-    focusKnowledgeNote,
-    teacherCustomIdeaNote,
-    referenceDocText,
-    referenceFileName,
-    subtrackId
+  const activeTopics =
+    topicObjs && topicObjs.length > 0 ? topicObjs : [resolvedTopicObj];
+
+  const topicBanks = activeTopics.map((t) =>
+    getTopicPureBank(
+      grade,
+      t,
+      focusKnowledgeNote,
+      teacherCustomIdeaNote,
+      referenceDocText,
+      referenceFileName,
+      subtrackId
+    )
   );
 
   const totalMcqPoints =
@@ -613,15 +657,18 @@ function buildFallbackExam(
 
   const pointPerMcq = targetCount > 0 ? Number((totalMcqPoints / targetCount).toFixed(2)) : 0;
   const generatedMcqs = Array.from({ length: targetCount }, (_, idx) => {
-    const template = pureBank.mcqs[idx % pureBank.mcqs.length];
+    const bank = topicBanks[idx % topicBanks.length];
+    const itemIdx = Math.floor(idx / topicBanks.length) % bank.mcqs.length;
+    const template = bank.mcqs[itemIdx];
+    const cleanQ = cleanQuestionText(template.question);
+    const note = cleanIllustrationCaption(template.illustrationNote) || cleanQ;
     return {
       id: `mcq-${idx + 1}-${Date.now()}`,
-      question:
-        idx < pureBank.mcqs.length
-          ? template.question
-          : `[Câu ${idx + 1} - ${resolvedTopicObj.code}] ${template.question}`,
+      question: cleanQ,
       cognitiveLevel: template.cognitiveLevel,
-      illustrationNote: template.illustrationNote,
+      illustrationNote: note,
+      illustrationImageDataUrl: generateIllustrationDataUrl(note, idx),
+      illustrationVariant: idx,
       options: template.options,
       correctIndex: template.correctIndex,
       explanation: template.explanation,
@@ -632,12 +679,18 @@ function buildFallbackExam(
   const pointPerEssay =
     targetEssayCount > 0 ? Number((totalEssayPoints / targetEssayCount).toFixed(2)) : 0;
   const generatedEssays = Array.from({ length: targetEssayCount }, (_, idx) => {
-    const item = pureBank.essays[idx % pureBank.essays.length];
+    const bank = topicBanks[idx % topicBanks.length];
+    const saIdx = Math.floor(idx / topicBanks.length) % bank.essays.length;
+    const item = bank.essays[saIdx];
+    const cleanQ = cleanQuestionText(item.question);
+    const note = cleanIllustrationCaption(item.illustrationNote) || cleanQ;
     return {
       id: `sa-${idx + 1}-${Date.now()}`,
-      question: item.question,
+      question: cleanQ,
       cognitiveLevel: item.cognitiveLevel,
-      illustrationNote: item.illustrationNote,
+      illustrationNote: note,
+      illustrationImageDataUrl: generateIllustrationDataUrl(note, idx),
+      illustrationVariant: idx,
       sampleAnswer: item.sampleAnswer,
       gradingGuide: item.gradingGuide,
       semanticKeywords: item.semanticKeywords,
@@ -653,7 +706,7 @@ function buildFallbackExam(
     points: 0,
   };
 
-  return {
+  return enrichExamWithAutoIllustrations({
     id: `exam-${Date.now()}`,
     title: `Đề Kiểm tra (${grade}) — ${topicTitle}`,
     grade,
@@ -661,7 +714,7 @@ function buildFallbackExam(
     multipleChoice: generatedMcqs,
     shortAnswer: defaultShortAnswer,
     shortAnswers: generatedEssays,
-  };
+  });
 }
 
 function buildFallbackPracticeAssignment(
@@ -1015,14 +1068,21 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     "5-common"
   );
 
-  // Bước 1: Chọn Khối lớp & Lớp giao bài
+  // Bước 1: Chọn Khối lớp & Chọn nhiều lớp giao bài trong cùng khối lớp
   const [grade, setGrade] = useState<GradeLevel>(initialGrade);
+  const initialGradeClassNames = classes
+    .filter((c) => c.grade === initialGrade)
+    .map((c) => c.name);
+  const [selectedClassNames, setSelectedClassNames] = useState<string[]>(
+    initialGradeClassNames.length > 0 ? [initialGradeClassNames[0]] : ["Lớp 4/1"]
+  );
   const [className, setClassName] = useState<string>(
-    classes.find((c) => c.grade === initialGrade)?.name || "Lớp 4/1"
+    initialGradeClassNames[0] || "Lớp 4/1"
   );
 
-  // Bước 3: Chọn 1 trong 6 Chủ đề chính SGK Tin học KNTT đúng theo Khối lớp Bước 1
+  // Bước 3: Chọn 1 hoặc nhiều Chủ đề SGK Tin học KNTT đúng theo Khối lớp Bước 1
   const [selectedTopicId, setSelectedTopicId] = useState<string>(initialTopic.id);
+  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>([initialTopic.id]);
   const [selectedSubtrackId, setSelectedSubtrackId] = useState<string>("5-common");
 
   // Bước 2: Chọn Loại đề (Thực hành / Lý thuyết / Bài kiểm tra hàng tháng / Đề thi Học kỳ)
@@ -1083,10 +1143,54 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   const [confirmingDeleteAsgId, setConfirmingDeleteAsgId] = useState<string | null>(null);
 
   const currentGradeTopics = KNTT_CURRICULUM[grade] || KNTT_CURRICULUM["Lớp 4"];
-  const activeTopicObj =
-    currentGradeTopics.find((t) => t.id === selectedTopicId) || currentGradeTopics[0];
+  const selectedTopicObjs: KnttTopicConfig[] = (() => {
+    const matched = currentGradeTopics.filter((t) => selectedTopicIds.includes(t.id));
+    if (matched.length > 0) return matched;
+    const single = currentGradeTopics.find((t) => t.id === selectedTopicId) || currentGradeTopics[0];
+    return [single];
+  })();
+  const activeTopicObj = selectedTopicObjs[0] || currentGradeTopics[0];
+  const selectedTopicsTitleSummary =
+    selectedTopicObjs.length === 1
+      ? activeTopicObj.title
+      : selectedTopicObjs.map((t) => t.title).join(" + ");
+  const selectedTopicsShortCodes =
+    selectedTopicObjs.length === 1
+      ? activeTopicObj.code
+      : selectedTopicObjs.map((t) => t.code).join(", ");
+  const selectedTopicsLessonsSummary =
+    selectedTopicObjs.length === 1
+      ? activeTopicObj.lessonsSummary
+      : selectedTopicObjs.map((t) => `[${t.code}] ${t.lessonsSummary}`).join(" | ");
+  const topicWithSubtracks = selectedTopicObjs.find(
+    (t) => t.subtracks && t.subtracks.length > 0
+  );
 
   const matchingClassesForGrade = classes.filter((c) => c.grade === grade);
+  const toggleTargetClass = (clsName: string) => {
+    setSelectedClassNames((prev) => {
+      const exists = prev.includes(clsName);
+      const next = exists
+        ? prev.length > 1
+          ? prev.filter((c) => c !== clsName)
+          : prev
+        : [...prev, clsName];
+      const nextLabel = formatTargetClassesLabel(next, grade);
+      setClassName(nextLabel);
+      return next;
+    });
+  };
+  const selectAllClassesInGrade = () => {
+    const allNames = matchingClassesForGrade.map((c) => c.name);
+    if (allNames.length === 0) return;
+    setSelectedClassNames(allNames);
+    setClassName(formatTargetClassesLabel(allNames, grade));
+  };
+  const selectSingleFirstClassInGrade = () => {
+    const first = matchingClassesForGrade[0]?.name || className;
+    setSelectedClassNames([first]);
+    setClassName(first);
+  };
   const hasStep4Material = Boolean(
     uploadedDataFileName || referenceDocText.trim() || referencePdfBase64
   );
@@ -1097,7 +1201,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     targetTopicObj: KnttTopicConfig = activeTopicObj,
     targetSubtrackId: string = selectedSubtrackId
   ) => {
-    const targetTopicTitle = topicTitleForFocus || targetTopicObj.title;
+    const targetTopicTitle = topicTitleForFocus || selectedTopicsTitleSummary || targetTopicObj.title;
     const syncedNotes = getDefaultStep4NotesForGradeAndTopic(
       targetGrade,
       targetTopicObj,
@@ -1121,7 +1225,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     setUploadedDataFileName(sampleFileName);
     const sampleMatrix = `MA TRẬN ĐỀ KIỂM TRA ĐỊNH KỲ ${semesterType.toUpperCase()} — MÔN TIN HỌC ${grade.toUpperCase()} (SÁCH KẾT NỐI TRI THỨC)
 - Khối lớp đã chọn ở Bước 1: ${grade}
-- Chủ đề trọng tâm đã chọn ở Bước 3: ${activeTopicObj.title} (${activeTopicObj.lessonsSummary})
+- Các chủ đề trọng tâm đã chọn ở Bước 3 (${selectedTopicObjs.length} chủ đề): ${selectedTopicsTitleSummary} (${selectedTopicsLessonsSummary})
 1. Tỷ lệ điểm số:
 - Phần Lý thuyết (Trắc nghiệm + Tự luận): ${semesterTheoryPercent}% (${(
       semesterTheoryPercent / 10
@@ -1130,170 +1234,149 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       semesterPracticePercent / 10
     ).toFixed(1)} điểm)
 2. Tỷ lệ mức độ nhận thức:
-- Mức 1 (Nhận biết): ${semesterNhanBietPercent}% — Nhận diện biểu tượng, khái niệm cơ bản của ${grade} thuộc ${
-      activeTopicObj.code
-    } (Có hình ảnh minh họa).
-- Mức 2 (Thông hiểu): ${semesterThongHieuPercent}% — Hiểu thao tác và quy tắc thực hiện của ${grade} thuộc ${
-      activeTopicObj.code
-    }.
-- Mức 3 (Vận dụng): ${semesterVanDungPercent}% — Vận dụng xử lý tình huống thực tế và thực hành của ${grade} thuộc ${
-      activeTopicObj.code
-    }.
+- Mức 1 (Nhận biết): ${semesterNhanBietPercent}% — Nhận diện biểu tượng, khái niệm cơ bản của ${grade} thuộc ${selectedTopicsShortCodes} (Có hình ảnh minh họa).
+- Mức 2 (Thông hiểu): ${semesterThongHieuPercent}% — Hiểu thao tác và quy tắc thực hiện của ${grade} thuộc ${selectedTopicsShortCodes}.
+- Mức 3 (Vận dụng): ${semesterVanDungPercent}% — Vận dụng xử lý tình huống thực tế và thực hành của ${grade} thuộc ${selectedTopicsShortCodes}.
 3. Cấu trúc đề:
 - PHẦN I: TRẮC NGHIỆM (${theoryQuestionCount} câu) — Bắt buộc có thẻ [HÌNH ẢNH MINH HỌA: ...].
 - PHẦN II: TỰ LUẬN & THỰC HÀNH (${theoryEssayCount} câu tự luận + ${semesterPracticeCount} bài thực hành) — Kèm Đáp án và Hướng dẫn chấm chi tiết từng câu.`;
     setReferenceDocText(sampleMatrix);
-    applyStep4StrictDirective(activeTopicObj.title, grade, activeTopicObj, selectedSubtrackId);
+    applyStep4StrictDirective(selectedTopicsTitleSummary, grade, activeTopicObj, selectedSubtrackId);
   };
 
-  // Khi đổi Khối lớp (Bước 1) -> Tự động đồng bộ Chủ đề Bước 3 và Ghi chú trọng tâm Bước 4 đúng theo Khối mới
+  const syncNotesAndPromptForTopics = (
+    nextTopics: KnttTopicConfig[],
+    targetGrade: GradeLevel = grade,
+    targetSubtrackId: string = selectedSubtrackId
+  ) => {
+    if (nextTopics.length === 0) return;
+    const primaryTopic = nextTopics[0];
+    const combinedTitles = nextTopics.map((t) => t.title).join(" + ");
+    const combinedFocusNotes = nextTopics
+      .map(
+        (t) =>
+          getDefaultStep4NotesForGradeAndTopic(targetGrade, t, targetSubtrackId).focusNote
+      )
+      .join(" | ");
+    const primaryCustomNote = getDefaultStep4NotesForGradeAndTopic(
+      targetGrade,
+      primaryTopic,
+      targetSubtrackId
+    ).customIdeaNote;
+
+    if (builderMode === "monthly" && monthlyExamFormat === "practice_only") {
+      setFileType(primaryTopic.recommendedFileType);
+    } else if (builderMode === "practice") {
+      setFileType(primaryTopic.recommendedFileType);
+    }
+
+    if (hasStep4Material) {
+      applyStep4StrictDirective(combinedTitles, targetGrade, primaryTopic, targetSubtrackId);
+    } else {
+      setFocusKnowledgeNote(combinedFocusNotes);
+      setTeacherCustomIdeaNote(primaryCustomNote);
+      const combinedTheoryPrompt = nextTopics.map((t) => t.theoryPrompt).join(" Kết hợp: ");
+      const combinedPracticePrompt = nextTopics
+        .map((t) => t.practicePrompt)
+        .join(" Kết hợp: ");
+      if (builderMode === "monthly") {
+        setTopicInput(
+          `Bài kiểm tra định kỳ hàng tháng (${monthlyExamMonth}) môn Tin học ${targetGrade} — ${combinedTitles}: ${combinedTheoryPrompt}`
+        );
+      } else if (builderMode === "semester") {
+        setTopicInput(
+          `Đề thi định kỳ ${semesterType} môn Tin học ${targetGrade} — Trọng tâm (${nextTopics.length} chủ đề: ${combinedTitles}): ${combinedTheoryPrompt}`
+        );
+      } else {
+        setTopicInput(
+          builderMode === "theory" ? combinedTheoryPrompt : combinedPracticePrompt
+        );
+      }
+    }
+    setErrorMsg(null);
+    setSavedNotice(null);
+  };
+
+  // Khi đổi Khối lớp (Bước 1) -> Tự động đồng bộ Chủ đề Bước 3, Danh sách lớp trong khối và Ghi chú trọng tâm Bước 4 đúng theo Khối mới
   const handleGradeChange = (newGrade: GradeLevel) => {
     setGrade(newGrade);
-    const matchingCls = classes.find((c) => c.grade === newGrade);
-    setClassName(
-      matchingCls
-        ? matchingCls.name
-        : newGrade === "Lớp 3"
+    const matchingClsList = classes.filter((c) => c.grade === newGrade);
+    const defaultClsName =
+      matchingClsList[0]?.name ||
+      (newGrade === "Lớp 3"
         ? "Lớp 3/1"
         : newGrade === "Lớp 4"
         ? "Lớp 4/1"
-        : "Lớp 5/1"
-    );
+        : "Lớp 5/1");
+    setSelectedClassNames([defaultClsName]);
+    setClassName(defaultClsName);
 
     const topicsOfGrade = KNTT_CURRICULUM[newGrade];
-    const currentIdx = Math.max(
-      0,
-      currentGradeTopics.findIndex((t) => t.id === selectedTopicId)
-    );
-    const defaultTopic = topicsOfGrade[currentIdx] || topicsOfGrade[0];
+    const selectedIndices = selectedTopicIds
+      .map((id) => currentGradeTopics.findIndex((t) => t.id === id))
+      .filter((idx) => idx >= 0);
+    const mappedTopics =
+      selectedIndices.length > 0
+        ? selectedIndices.map((idx) => topicsOfGrade[idx] || topicsOfGrade[0])
+        : [topicsOfGrade[0]];
+    const uniqueMappedIds = Array.from(new Set(mappedTopics.map((t) => t.id)));
+    const defaultTopic = mappedTopics[0] || topicsOfGrade[0];
     setSelectedTopicId(defaultTopic.id);
+    setSelectedTopicIds(uniqueMappedIds);
     setSelectedSubtrackId("5-common");
 
-    const syncedNotes = getDefaultStep4NotesForGradeAndTopic(
-      newGrade,
-      defaultTopic,
-      "5-common"
-    );
-
-    if (hasStep4Material) {
-      applyStep4StrictDirective(defaultTopic.title, newGrade, defaultTopic, "5-common");
-    } else {
-      setFocusKnowledgeNote(syncedNotes.focusNote);
-      setTeacherCustomIdeaNote(syncedNotes.customIdeaNote);
-      if (builderMode === "semester") {
-        setTopicInput(
-          `Đề thi định kỳ ${semesterType} môn Tin học ${newGrade} — ${defaultTopic.title}: ${defaultTopic.theoryPrompt}`
-        );
-      } else if (builderMode === "monthly") {
-        setTopicInput(
-          `Bài kiểm tra định kỳ hàng tháng (${monthlyExamMonth}) môn Tin học ${newGrade} — ${defaultTopic.title}: ${defaultTopic.theoryPrompt}`
-        );
-        if (monthlyExamFormat === "practice_only") {
-          setFileType(defaultTopic.recommendedFileType);
-        } else {
-          setFileType("theory");
-        }
-      } else {
-        const nextPrompt =
-          builderMode === "theory" ? defaultTopic.theoryPrompt : defaultTopic.practicePrompt;
-        setTopicInput(nextPrompt);
-        if (builderMode === "practice") {
-          setFileType(defaultTopic.recommendedFileType);
-        }
-      }
-    }
-    setErrorMsg(null);
-    setSavedNotice(null);
+    syncNotesAndPromptForTopics(mappedTopics, newGrade, "5-common");
   };
 
-  // Khi chọn 1 trong 6 Chủ đề SGK KNTT (Bước 3) -> Tự động đồng bộ Ghi chú Bước 4 đúng Chủ đề & Khối lớp
-  const handleTopicChange = (newTopicId: string) => {
-    setSelectedTopicId(newTopicId);
-    const found = currentGradeTopics.find((t) => t.id === newTopicId);
-    if (!found) return;
+  // Chọn / bỏ chọn nhiều chủ đề cùng lúc ở Bước 3
+  const handleToggleTopicSelection = (topicId: string) => {
+    const exists = selectedTopicIds.includes(topicId);
+    const nextIds = exists
+      ? selectedTopicIds.length > 1
+        ? selectedTopicIds.filter((id) => id !== topicId)
+        : selectedTopicIds
+      : [...selectedTopicIds, topicId];
 
-    if (found.subtracks && found.subtracks.length > 0) {
-      const sub = found.subtracks[0];
-      setSelectedSubtrackId(sub.id);
-      const syncedNotes = getDefaultStep4NotesForGradeAndTopic(grade, found, sub.id);
-      if (builderMode === "monthly" && monthlyExamFormat === "practice_only") {
-        setFileType(sub.recommendedFileType);
-      } else if (builderMode === "practice") {
-        setFileType(sub.recommendedFileType);
-      }
-      if (hasStep4Material) {
-        applyStep4StrictDirective(`${found.title} (${sub.label})`, grade, found, sub.id);
-      } else {
-        setFocusKnowledgeNote(syncedNotes.focusNote);
-        setTeacherCustomIdeaNote(syncedNotes.customIdeaNote);
-        if (builderMode === "monthly") {
-          setTopicInput(
-            `Bài kiểm tra định kỳ hàng tháng (${monthlyExamMonth}) môn Tin học ${grade} — ${found.title} (${sub.label}): ${sub.theoryPrompt}`
-          );
-        } else if (builderMode === "semester") {
-          setTopicInput(
-            `Đề thi định kỳ ${semesterType} môn Tin học ${grade} — Trọng tâm ${found.title} (${sub.label}): ${sub.theoryPrompt}`
-          );
-        } else {
-          const basePrompt = builderMode === "theory" ? sub.theoryPrompt : sub.practicePrompt;
-          setTopicInput(basePrompt);
-        }
-      }
-    } else {
-      const syncedNotes = getDefaultStep4NotesForGradeAndTopic(grade, found, "5-common");
-      if (builderMode === "monthly" && monthlyExamFormat === "practice_only") {
-        setFileType(found.recommendedFileType);
-      } else if (builderMode === "practice") {
-        setFileType(found.recommendedFileType);
-      }
-      if (hasStep4Material) {
-        applyStep4StrictDirective(found.title, grade, found, "5-common");
-      } else {
-        setFocusKnowledgeNote(syncedNotes.focusNote);
-        setTeacherCustomIdeaNote(syncedNotes.customIdeaNote);
-        if (builderMode === "monthly") {
-          setTopicInput(
-            `Bài kiểm tra định kỳ hàng tháng (${monthlyExamMonth}) môn Tin học ${grade} — ${found.title}: ${found.theoryPrompt}`
-          );
-        } else if (builderMode === "semester") {
-          setTopicInput(
-            `Đề thi định kỳ ${semesterType} môn Tin học ${grade} — Trọng tâm ${found.title}: ${found.theoryPrompt}`
-          );
-        } else {
-          const basePrompt = builderMode === "theory" ? found.theoryPrompt : found.practicePrompt;
-          setTopicInput(basePrompt);
-        }
-      }
+    // Giữ đúng thứ tự Chủ đề 1 -> 6
+    const orderedTopics = currentGradeTopics.filter((t) => nextIds.includes(t.id));
+    const orderedIds = orderedTopics.map((t) => t.id);
+
+    setSelectedTopicIds(orderedIds);
+    setSelectedTopicId(orderedIds[0] || topicId);
+    syncNotesAndPromptForTopics(orderedTopics, grade, selectedSubtrackId);
+  };
+
+  const handleSelectTopicPreset = (preset: "all" | "hk1" | "hk2" | "single", singleId?: string) => {
+    let targetTopics: KnttTopicConfig[] = [];
+    if (preset === "all") {
+      targetTopics = [...currentGradeTopics];
+    } else if (preset === "hk1") {
+      targetTopics = currentGradeTopics.slice(0, 3);
+    } else if (preset === "hk2") {
+      targetTopics = currentGradeTopics.slice(3, 6);
+    } else if (preset === "single") {
+      const found =
+        currentGradeTopics.find((t) => t.id === singleId) || currentGradeTopics[0];
+      targetTopics = [found];
     }
-    setErrorMsg(null);
-    setSavedNotice(null);
+    if (targetTopics.length === 0) return;
+    const ids = targetTopics.map((t) => t.id);
+    setSelectedTopicIds(ids);
+    setSelectedTopicId(ids[0]);
+    syncNotesAndPromptForTopics(targetTopics, grade, selectedSubtrackId);
   };
 
   // Khi chọn Mạch phân hóa 5A / 5B ở Chủ đề 5 Lớp 5
   const handleSubtrackChange = (subId: string) => {
     setSelectedSubtrackId(subId);
-    const sub = activeTopicObj.subtracks?.find((s) => s.id === subId);
+    const sub = topicWithSubtracks?.subtracks?.find((s) => s.id === subId);
     if (!sub) return;
-    const syncedNotes = getDefaultStep4NotesForGradeAndTopic(grade, activeTopicObj, subId);
     if (builderMode === "monthly" && monthlyExamFormat === "practice_only") {
       setFileType(sub.recommendedFileType);
     } else if (builderMode === "practice") {
       setFileType(sub.recommendedFileType);
     }
-    if (hasStep4Material) {
-      applyStep4StrictDirective(`${activeTopicObj.title} (${sub.label})`, grade, activeTopicObj, subId);
-    } else {
-      setFocusKnowledgeNote(syncedNotes.focusNote);
-      setTeacherCustomIdeaNote(syncedNotes.customIdeaNote);
-      if (builderMode === "monthly") {
-        setTopicInput(
-          `Bài kiểm tra định kỳ hàng tháng (${monthlyExamMonth}) môn Tin học ${grade} — ${sub.label}: ${sub.theoryPrompt}`
-        );
-      } else if (builderMode !== "semester") {
-        const basePrompt = builderMode === "theory" ? sub.theoryPrompt : sub.practicePrompt;
-        setTopicInput(basePrompt);
-      }
-    }
+    syncNotesAndPromptForTopics(selectedTopicObjs, grade, subId);
   };
 
   // Khi chuyển đổi giữa Loại đề Thực hành, Lý thuyết, Bài kiểm tra hàng tháng và Đề Thi Học Kỳ (Bước 2)
@@ -1477,15 +1560,15 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         "Bám sát 100% tài liệu SGK Tin học đã đính kèm, không sáng tạo thêm các phần kiến thức ngoài.";
 
     const effectiveTeacherRequest = hasStep4Material
-      ? `${STRICT_STEP3_STEP4_DIRECTIVE} (Chủ đề đã chọn ở Bước 3: ${activeTopicObj.title} — ${activeTopicObj.lessonsSummary})`
+      ? `${STRICT_STEP3_STEP4_DIRECTIVE} (Các chủ đề đã chọn ở Bước 3: ${selectedTopicsTitleSummary} — ${selectedTopicsLessonsSummary})`
       : topicInput;
 
     const structuredFocusNotesBlock = `[GHI CHÚ TRỌNG TÂM]:
-- Chủ đề đã chọn ở Bước 3: ${activeTopicObj.title} (${activeTopicObj.lessonsSummary})
+- Các chủ đề đã chọn ở Bước 3 (${selectedTopicObjs.length} chủ đề): ${selectedTopicsTitleSummary} (${selectedTopicsLessonsSummary})
 - Phần kiến thức trọng tâm cần tập trung ra đề: ${
       hasStep4Material
         ? `${STRICT_STEP3_STEP4_DIRECTIVE} — ${focusKnowledgeNote.trim()}`
-        : focusKnowledgeNote.trim() || activeTopicObj.title
+        : focusKnowledgeNote.trim() || selectedTopicsTitleSummary
     }
 - Ý tưởng riêng của giáo viên: ${
       teacherCustomIdeaNote.trim() ||
@@ -1533,8 +1616,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               essayCount: theoryEssayCount,
               practiceCount: semesterPracticeCount,
               topic: fullTopicWithNotes,
-              selectedTopicTitle: activeTopicObj.title,
-              selectedTopicLessons: activeTopicObj.lessonsSummary,
+              selectedTopicTitle: selectedTopicsTitleSummary,
+              selectedTopicLessons: selectedTopicsLessonsSummary,
               selectedSubtrackId,
               hasStep4UploadedMaterial: hasStep4Material,
               focusKnowledgeNote: hasStep4Material
@@ -1604,7 +1687,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             id: `sem-exam-${Date.now()}`,
             title:
               data.title ||
-              `Đề Kiểm tra Định kỳ ${semesterType} Môn Tin học ${grade} (Năm học ${semesterSchoolYear})`,
+              `Đề Kiểm tra Định kỳ ${semesterType} Môn Tin học ${grade} (${selectedTopicsShortCodes} · Năm học ${semesterSchoolYear})`,
             grade,
             durationMinutes: Number(data.durationMinutes || semesterDuration),
             multipleChoice: normalizedMcqs,
@@ -1630,22 +1713,30 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             },
           };
 
+          const enrichedSemExam = enrichExamWithAutoIllustrations(semExam, grade);
+          const targetClsList =
+            selectedClassNames.length > 0 ? selectedClassNames : [className];
+          const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
+
           const newAsg: Assignment = {
             id: `asg-sem-${Date.now()}`,
             code: `DeThi_${semesterType.replace(/\s+/g, "")}_${grade.replace(/\s+/g, "")}`,
-            title: semExam.title,
+            title: enrichedSemExam.title,
             grade,
-            className,
+            className: formattedClsLabel,
+            targetClassNames: targetClsList,
             fileType: "theory",
             isSemesterExam: true,
             studentPrompt: `ĐỀ THI ĐỊNH KỲ ${semesterType.toUpperCase()} (${semesterDuration} phút) — Phần I: Trắc nghiệm (${
-              normalizedMcqs.length
-            } câu); Phần II: Tự luận (${normalizedEssays.length} câu) & Thực hành (${
+              enrichedSemExam.multipleChoice.length
+            } câu); Phần II: Tự luận (${
+              (enrichedSemExam.shortAnswers || []).length
+            } câu) & Thực hành (${
               normalizedPracticeTasks.length
             } bài). Em hãy hoàn thành tất cả các câu hỏi trước khi bấm Nộp bài nhé!`,
-            standardFileNamePattern: `MaHS_HoTen_${className.replace(/\s+/g, "")}_DeThiHocKy.json`,
-            checklist: buildTheoryChecklistFromExam(semExam),
-            theoryExam: semExam,
+            standardFileNamePattern: `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_DeThiHocKy.json`,
+            checklist: buildTheoryChecklistFromExam(enrichedSemExam),
+            theoryExam: enrichedSemExam,
           };
 
           setGeneratedAssignment(newAsg);
@@ -1656,8 +1747,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               topic: fullTopicWithNotes,
-              selectedTopicTitle: activeTopicObj.title,
-              selectedTopicLessons: activeTopicObj.lessonsSummary,
+              selectedTopicTitle: selectedTopicsTitleSummary,
+              selectedTopicLessons: selectedTopicsLessonsSummary,
               selectedSubtrackId,
               hasStep4UploadedMaterial: hasStep4Material,
               grade,
@@ -1720,10 +1811,10 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             title:
               data.title ||
               (builderMode === "monthly"
-                ? `Bài Kiểm tra Hàng tháng (${monthlyExamMonth}) — Tin học ${grade}: ${activeTopicObj.title}`
+                ? `Bài Kiểm tra Hàng tháng (${monthlyExamMonth}) — Tin học ${grade}: ${selectedTopicsShortCodes}`
                 : uploadedDataFileName
-                ? `Đề Kiểm tra ${grade} — ${activeTopicObj.title} (Tài liệu: ${uploadedDataFileName})`
-                : `Đề Kiểm tra ${grade} — ${activeTopicObj.title}`),
+                ? `Đề Kiểm tra ${grade} — ${selectedTopicsShortCodes} (Tài liệu: ${uploadedDataFileName})`
+                : `Đề Kiểm tra ${grade} — ${selectedTopicsTitleSummary}`),
             grade,
             durationMinutes:
               data.durationMinutes ||
@@ -1739,26 +1830,32 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             shortAnswers: normalizedEssays,
           };
 
+          const enrichedExam = enrichExamWithAutoIllustrations(exam, grade);
+          const targetClsList =
+            selectedClassNames.length > 0 ? selectedClassNames : [className];
+          const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
+
           const newAsg: Assignment = {
             id: `asg-${Date.now()}`,
             code:
               builderMode === "monthly"
                 ? `KiemTraThang_${assignments.length + 1}`
                 : `BaiLyThuyet${assignments.length + 1}`,
-            title: exam.title,
+            title: enrichedExam.title,
             grade,
-            className,
+            className: formattedClsLabel,
+            targetClassNames: targetClsList,
             fileType: "theory",
             studentPrompt:
               theoryEssayCount > 0
-                ? `Em hãy chọn đáp án đúng cho ${exam.multipleChoice.length} câu hỏi trắc nghiệm và trả lời đầy đủ ${normalizedEssays.length} câu hỏi tự luận bên dưới trước khi bấm Nộp bài nhé!`
-                : `Em hãy chọn đáp án đúng cho tất cả ${exam.multipleChoice.length} câu hỏi trắc nghiệm bên dưới trước khi bấm Nộp bài nhé!`,
+                ? `Em hãy chọn đáp án đúng cho ${enrichedExam.multipleChoice.length} câu hỏi trắc nghiệm và trả lời đầy đủ ${(enrichedExam.shortAnswers || []).length} câu hỏi tự luận bên dưới trước khi bấm Nộp bài nhé!`
+                : `Em hãy chọn đáp án đúng cho tất cả ${enrichedExam.multipleChoice.length} câu hỏi trắc nghiệm bên dưới trước khi bấm Nộp bài nhé!`,
             standardFileNamePattern:
               builderMode === "monthly"
-                ? `MaHS_HoTen_${className.replace(/\s+/g, "")}_KiemTraHangThang.json`
-                : `MaHS_HoTen_${className.replace(/\s+/g, "")}_BaiLyThuyet.json`,
-            checklist: buildTheoryChecklistFromExam(exam),
-            theoryExam: exam,
+                ? `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_KiemTraHangThang.json`
+                : `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_BaiLyThuyet.json`,
+            checklist: buildTheoryChecklistFromExam(enrichedExam),
+            theoryExam: enrichedExam,
           };
 
           setGeneratedAssignment(newAsg);
@@ -1769,8 +1866,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               topic: fullTopicWithNotes,
-              selectedTopicTitle: activeTopicObj.title,
-              selectedTopicLessons: activeTopicObj.lessonsSummary,
+              selectedTopicTitle: selectedTopicsTitleSummary,
+              selectedTopicLessons: selectedTopicsLessonsSummary,
               selectedSubtrackId,
               hasStep4UploadedMaterial: hasStep4Material,
               grade,
@@ -1809,8 +1906,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             title:
               data.title ||
               (uploadedDataFileName
-                ? `${activeTopicObj.title} (${grade} - Theo ${uploadedDataFileName})`
-                : `${activeTopicObj.title} (${grade})`),
+                ? `${selectedTopicsTitleSummary} (${grade} - Theo ${uploadedDataFileName})`
+                : `${selectedTopicsTitleSummary} (${grade})`),
             grade,
             className,
             fileType,
@@ -1819,7 +1916,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               data.standardFileNamePattern ||
               `MaHS_HoTen_${className.replace(/\s+/g, "")}_BaiTap.${fileType}`,
             templateSummary: data.templateSummary || {
-              headingText: data.title || activeTopicObj.title,
+              headingText: data.title || selectedTopicsTitleSummary,
               bodyLines: (data.checklist || []).map((c: any) => c.criterion),
             },
             checklist: data.checklist || [],
@@ -1831,8 +1928,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       } catch {
         if (attempt >= maxRetries) {
           const fallbackTitle = uploadedDataFileName
-            ? `${activeTopicObj.title} (Tài liệu Bước 4: ${uploadedDataFileName})`
-            : activeTopicObj.title;
+            ? `${selectedTopicsTitleSummary} (Tài liệu Bước 4: ${uploadedDataFileName})`
+            : selectedTopicsTitleSummary;
 
           if (builderMode === "semester") {
             const fallbackSemExam = buildFallbackSemesterExam({
@@ -1850,28 +1947,35 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               practiceCount: semesterPracticeCount,
               topicPrompt: combinedTopicPrompt,
               topicObj: activeTopicObj,
+              topicObjs: selectedTopicObjs,
               focusKnowledgeNote,
               teacherCustomIdeaNote,
               referenceDocText,
               referenceFileName: uploadedDataFileName,
               subtrackId: selectedSubtrackId,
             });
+            const enrichedFallbackSem = enrichExamWithAutoIllustrations(
+              fallbackSemExam,
+              grade
+            );
+            const targetClsList =
+              selectedClassNames.length > 0 ? selectedClassNames : [className];
+            const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
             const fallbackSemAsg: Assignment = {
               id: `asg-sem-${Date.now()}`,
               code: `DeThi_${semesterType.replace(/\s+/g, "")}_${grade.replace(/\s+/g, "")}`,
-              title: fallbackSemExam.title,
+              title: enrichedFallbackSem.title,
               grade,
-              className,
+              className: formattedClsLabel,
+              targetClassNames: targetClsList,
               fileType: "theory",
               isSemesterExam: true,
-              studentPrompt: `ĐỀ THI ĐỊNH KỲ ${semesterType.toUpperCase()} (${semesterDuration} phút — ${
-                activeTopicObj.title
-              }) — Phần I: Trắc nghiệm (${
-                fallbackSemExam.multipleChoice.length
+              studentPrompt: `ĐỀ THI ĐỊNH KỲ ${semesterType.toUpperCase()} (${semesterDuration} phút — ${selectedTopicsShortCodes}) — Phần I: Trắc nghiệm (${
+                enrichedFallbackSem.multipleChoice.length
               } câu); Phần II: Tự luận & Thực hành. Em hãy hoàn thành tất cả các câu hỏi trước khi bấm Nộp bài nhé!`,
-              standardFileNamePattern: `MaHS_HoTen_${className.replace(/\s+/g, "")}_DeThiHocKy.json`,
-              checklist: buildTheoryChecklistFromExam(fallbackSemExam),
-              theoryExam: fallbackSemExam,
+              standardFileNamePattern: `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_DeThiHocKy.json`,
+              checklist: buildTheoryChecklistFromExam(enrichedFallbackSem),
+              theoryExam: enrichedFallbackSem,
             };
             setGeneratedAssignment(fallbackSemAsg);
           } else if (!isPracticeGeneration) {
@@ -1879,19 +1983,26 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               builderMode === "monthly"
                 ? `Bài Kiểm tra Hàng tháng (${monthlyExamMonth}) — ${fallbackTitle}`
                 : fallbackTitle;
-            const fallbackExam = buildFallbackExam(
-              grade,
-              monthlyOrTheoryTitle,
-              combinedTopicPrompt,
-              theoryQuestionCount,
-              theoryEssayCount,
-              activeTopicObj,
-              focusKnowledgeNote,
-              teacherCustomIdeaNote,
-              referenceDocText,
-              uploadedDataFileName,
-              selectedSubtrackId
+            const fallbackExam = enrichExamWithAutoIllustrations(
+              buildFallbackExam(
+                grade,
+                monthlyOrTheoryTitle,
+                combinedTopicPrompt,
+                theoryQuestionCount,
+                theoryEssayCount,
+                activeTopicObj,
+                focusKnowledgeNote,
+                teacherCustomIdeaNote,
+                referenceDocText,
+                uploadedDataFileName,
+                selectedSubtrackId,
+                selectedTopicObjs
+              ),
+              grade
             );
+            const targetClsList =
+              selectedClassNames.length > 0 ? selectedClassNames : [className];
+            const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
             const fallbackAsg: Assignment = {
               id: `asg-${Date.now()}`,
               code:
@@ -1900,7 +2011,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                   : `BaiLyThuyet${assignments.length + 1}`,
               title: fallbackExam.title,
               grade,
-              className,
+              className: formattedClsLabel,
+              targetClassNames: targetClsList,
               fileType: "theory",
               studentPrompt:
                 theoryEssayCount > 0
@@ -1908,16 +2020,19 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                   : `Em hãy chọn đáp án đúng cho tất cả ${fallbackExam.multipleChoice.length} câu hỏi trắc nghiệm bên dưới trước khi bấm Nộp bài nhé!`,
               standardFileNamePattern:
                 builderMode === "monthly"
-                  ? `MaHS_HoTen_${className.replace(/\s+/g, "")}_KiemTraHangThang.json`
-                  : `MaHS_HoTen_${className.replace(/\s+/g, "")}_BaiLyThuyet.json`,
+                  ? `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_KiemTraHangThang.json`
+                  : `MaHS_HoTen_${formattedClsLabel.replace(/\s+/g, "")}_BaiLyThuyet.json`,
               checklist: buildTheoryChecklistFromExam(fallbackExam),
               theoryExam: fallbackExam,
             };
             setGeneratedAssignment(fallbackAsg);
           } else {
+            const targetClsList =
+              selectedClassNames.length > 0 ? selectedClassNames : [className];
+            const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
             const fallbackPractice = buildFallbackPracticeAssignment(
               grade,
-              className,
+              formattedClsLabel,
               fileType,
               builderMode === "monthly"
                 ? `Kiểm tra Hàng tháng (${monthlyExamMonth}) - ${fallbackTitle}`
@@ -1928,10 +2043,13 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               activeTopicObj,
               selectedSubtrackId
             );
-            setGeneratedAssignment(fallbackPractice);
+            setGeneratedAssignment({
+              ...fallbackPractice,
+              targetClassNames: targetClsList,
+            });
           }
           setErrorMsg(
-            `Đã biên soạn Đề kiểm tra bám sát 100% chương trình ${grade} (Bước 1) và nội dung "${activeTopicObj.title}" đã chọn ở Bước 3${
+            `Đã biên soạn Đề kiểm tra bám sát 100% chương trình ${grade} (Bước 1) và nội dung "${selectedTopicsTitleSummary}" đã chọn ở Bước 3${
               hasStep4Material ? " cùng tài liệu Bước 4 (không thêm kiến thức ngoài hoặc lẫn khối lớp khác)" : ""
             }. Thầy có thể xem và chỉnh sửa chi tiết ở cột bên phải trước khi bấm Giao đề!`
           );
@@ -1974,11 +2092,20 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     const targetMcqTotal = Math.max(2.0, Number((10.0 - essaySum - practiceSum).toFixed(2)));
     const ptPerMcq = Number((targetMcqTotal / nextIdx).toFixed(2));
 
+    const defaultQuestionText = "Em hãy nhập nội dung câu hỏi trắc nghiệm tại đây?";
+    const defaultNote = "Biểu tượng phần mềm và giao diện máy tính";
     const newMcq = {
       id: `mcq-extra-${Date.now()}`,
-      question: `Câu hỏi ${nextIdx}: Em hãy nhập nội dung câu hỏi trắc nghiệm tại đây?`,
+      question: defaultQuestionText,
       cognitiveLevel: "Nhận biết" as CognitiveLevel,
-      illustrationNote: "[HÌNH ẢNH MINH HỌA: Mô tả hình ảnh biểu tượng hoặc giao diện cần chèn]",
+      illustrationNote: defaultNote,
+      illustrationVariant: 0,
+      illustrationImageDataUrl: generateIllustrationDataUrl(
+        defaultQuestionText,
+        defaultNote,
+        0,
+        generatedAssignment.grade
+      ),
       options: [
         "A. Phương án trả lời A (Đúng)",
         "B. Phương án trả lời B",
@@ -2084,11 +2211,20 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     const exam = generatedAssignment.theoryExam;
     const currentEssays = getActiveShortAnswers(exam);
     const nextIdx = currentEssays.length + 1;
+    const defaultEssayQ = "Em hãy nhập nội dung câu hỏi tự luận ngắn tại đây?";
+    const defaultEssayNote = "Tình huống thực hành trên máy tính";
     const newEssay = {
       id: `sa-extra-${Date.now()}-${nextIdx}`,
-      question: `Câu tự luận ${nextIdx}: Em hãy nhập câu hỏi tự luận ngắn tại đây?`,
+      question: defaultEssayQ,
       cognitiveLevel: "Thông hiểu" as CognitiveLevel,
-      illustrationNote: "",
+      illustrationNote: defaultEssayNote,
+      illustrationVariant: 0,
+      illustrationImageDataUrl: generateIllustrationDataUrl(
+        defaultEssayQ,
+        defaultEssayNote,
+        0,
+        generatedAssignment.grade
+      ),
       sampleAnswer: "Nhập đáp án chuẩn mẫu để AI đối chiếu...",
       gradingGuide: "Biểu điểm chi tiết từng ý...",
       semanticKeywords: ["từ khóa 1", "từ khóa 2"],
@@ -2167,6 +2303,233 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         practiceTasks: nextTasks,
       },
     });
+  };
+
+  const handleAddSemesterPracticeTask = () => {
+    if (
+      !generatedAssignment ||
+      !generatedAssignment.theoryExam ||
+      !generatedAssignment.theoryExam.semesterBlueprint
+    )
+      return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    const nextIdx = bp.practiceTasks.length + 1;
+    const defaultTitle = `Bài thực hành ${nextIdx}: Nhập tên yêu cầu thực hành`;
+    const defaultNote = "Giao diện phần mềm thực hành trên máy tính";
+    const newTask: SemesterPracticeTask = {
+      id: `sem-prac-manual-${Date.now()}-${nextIdx}`,
+      title: defaultTitle,
+      cognitiveLevel: "Vận dụng",
+      softwareType:
+        generatedAssignment.grade === "Lớp 5"
+          ? "Scratch (.sb3)"
+          : "Word (.docx)",
+      instructions:
+        "Em hãy nhập nội dung hướng dẫn và các bước thực hành trên máy tính cho học sinh tại đây...",
+      illustrationNote: defaultNote,
+      illustrationVariant: 0,
+      illustrationImageDataUrl: generateIllustrationDataUrl(
+        defaultTitle,
+        defaultNote,
+        0,
+        generatedAssignment.grade
+      ),
+      points: 3.0,
+      gradingRubric:
+        "- Thực hiện đúng yêu cầu định dạng / kịch bản: 2.0 điểm.\n- Lưu tệp đúng tên quy định: 1.0 điểm.",
+    };
+    const nextTasks = [...bp.practiceTasks, newTask];
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+  };
+
+  const handleRemoveSemesterPracticeTask = (idxToRemove: number) => {
+    if (
+      !generatedAssignment ||
+      !generatedAssignment.theoryExam ||
+      !generatedAssignment.theoryExam.semesterBlueprint
+    )
+      return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    if (bp.practiceTasks.length <= 1) return;
+    const nextTasks = bp.practiceTasks.filter((_, idx) => idx !== idxToRemove);
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+  };
+
+  const handleCreateManualSemesterExam = () => {
+    setErrorMsg(null);
+    setSavedNotice(null);
+
+    const targetMcq = Math.min(20, Math.max(1, theoryQuestionCount));
+    const targetEssay = Math.min(5, Math.max(0, theoryEssayCount));
+    const targetPractice = Math.min(4, Math.max(1, semesterPracticeCount));
+
+    const totalTheoryPoints = Number(((semesterTheoryPercent / 100) * 10).toFixed(2));
+    const totalPracticePoints = Number((10.0 - totalTheoryPoints).toFixed(2));
+
+    const essayPointsTotal =
+      targetEssay > 0 ? Math.min(2.5, Number((totalTheoryPoints * 0.35).toFixed(2))) : 0;
+    const mcqPointsTotal = Number((totalTheoryPoints - essayPointsTotal).toFixed(2));
+    const ptPerMcq = Number((mcqPointsTotal / targetMcq).toFixed(2));
+    const ptPerEssay =
+      targetEssay > 0 ? Number((essayPointsTotal / targetEssay).toFixed(2)) : 0;
+    const ptPerPractice = Number((totalPracticePoints / targetPractice).toFixed(2));
+
+    const multipleChoice = Array.from({ length: targetMcq }, (_, idx) => {
+      const topicForQ = selectedTopicObjs[idx % selectedTopicObjs.length] || activeTopicObj;
+      const level: CognitiveLevel =
+        idx < Math.ceil(targetMcq * 0.5)
+          ? "Nhận biết"
+          : idx < Math.ceil(targetMcq * 0.85)
+          ? "Thông hiểu"
+          : "Vận dụng";
+      const qText = `Nhập nội dung câu hỏi trắc nghiệm ${idx + 1} (${topicForQ.code} - ${grade})?`;
+      const note = `${topicForQ.title}`;
+      return {
+        id: `sem-mcq-manual-${idx + 1}-${Date.now()}`,
+        question: qText,
+        cognitiveLevel: level,
+        illustrationNote: note,
+        illustrationImageDataUrl: generateIllustrationDataUrl(qText, note, idx, grade),
+        illustrationVariant: idx % 5,
+        options: [
+          "A. Nhập phương án A (Đáp án đúng)",
+          "B. Nhập phương án B",
+          "C. Nhập phương án C",
+          "D. Nhập phương án D",
+        ],
+        correctIndex: 0,
+        explanation: `Giải thích đáp án đúng cho câu ${idx + 1}.`,
+        points: ptPerMcq,
+      };
+    });
+
+    const shortAnswers = Array.from({ length: targetEssay }, (_, idx) => {
+      const topicForSa = selectedTopicObjs[idx % selectedTopicObjs.length] || activeTopicObj;
+      const qText = `Nhập nội dung câu hỏi tự luận ${idx + 1} (${topicForSa.code} - ${grade})?`;
+      const note = `Tình huống thực tế ${topicForSa.code}`;
+      return {
+        id: `sem-sa-manual-${idx + 1}-${Date.now()}`,
+        question: qText,
+        cognitiveLevel: "Thông hiểu" as CognitiveLevel,
+        illustrationNote: note,
+        illustrationImageDataUrl: generateIllustrationDataUrl(qText, note, idx, grade),
+        illustrationVariant: idx % 5,
+        sampleAnswer: "Nhập đáp án mẫu và biểu điểm chấm chi tiết cho câu tự luận này...",
+        gradingGuide: "Nêu đúng ý chính đạt điểm tối đa.",
+        semanticKeywords: ["từ khóa 1", "từ khóa 2"],
+        points: ptPerEssay,
+      };
+    });
+
+    const defaultSoftware =
+      activeTopicObj.recommendedFileType === "sb3"
+        ? "Scratch (.sb3)"
+        : activeTopicObj.recommendedFileType === "pptx"
+        ? "PowerPoint (.pptx)"
+        : "Word (.docx)";
+
+    const practiceTasks: SemesterPracticeTask[] = Array.from(
+      { length: targetPractice },
+      (_, idx) => {
+        const topicForPt = selectedTopicObjs[idx % selectedTopicObjs.length] || activeTopicObj;
+        const title = `Bài thực hành ${idx + 1}: Nhập tên bài thực hành (${topicForPt.code})`;
+        const note = `Thực hành ${defaultSoftware} - ${topicForPt.code}`;
+        return {
+          id: `sem-prac-manual-${idx + 1}-${Date.now()}`,
+          title,
+          cognitiveLevel: "Vận dụng",
+          softwareType: defaultSoftware,
+          instructions:
+            "Nhập yêu cầu đề bài thực hành trên máy tính cho học sinh (Ví dụ: Tạo tệp mới, thực hiện định dạng/lập trình theo yêu cầu và lưu tệp đúng quy định)...",
+          illustrationNote: note,
+          illustrationImageDataUrl: generateIllustrationDataUrl(title, note, idx, grade),
+          illustrationVariant: idx % 5,
+          points: ptPerPractice,
+          gradingRubric: `- Thực hiện đúng các yêu cầu kỹ thuật chính: ${(
+            ptPerPractice * 0.75
+          ).toFixed(2)} điểm.\n- Lưu tệp đúng tên quy định và trình bày khoa học: ${(
+            ptPerPractice * 0.25
+          ).toFixed(2)} điểm.`,
+        };
+      }
+    );
+
+    const manualExam: TheoryExam = {
+      id: `sem-exam-manual-${Date.now()}`,
+      title: `Đề Kiểm tra Định kỳ ${semesterType} Môn Tin học ${grade} (${selectedTopicsShortCodes} · Năm học ${semesterSchoolYear})`,
+      grade,
+      durationMinutes: semesterDuration,
+      multipleChoice,
+      shortAnswer: shortAnswers[0] || {
+        id: `sa-empty-${Date.now()}`,
+        question: "Không có câu hỏi tự luận.",
+        sampleAnswer: "",
+        semanticKeywords: [],
+        points: 0,
+      },
+      shortAnswers,
+      semesterBlueprint: {
+        isSemesterExam: true,
+        semesterType,
+        schoolYear: semesterSchoolYear,
+        theoryPercent: semesterTheoryPercent,
+        practicePercent: semesterPracticePercent,
+        nhanBietPercent: semesterNhanBietPercent,
+        thongHieuPercent: semesterThongHieuPercent,
+        vanDungPercent: semesterVanDungPercent,
+        practiceTasks,
+        answerKeyAndGradingGuide: `I. ĐÁP ÁN PHẦN I — TRẮC NGHIỆM (${mcqPointsTotal.toFixed(
+          2
+        )} điểm): Giáo viên chọn đáp án đúng ở từng câu.\nII. HƯỚNG DẪN CHẤM PHẦN II — TỰ LUẬN & THỰC HÀNH (${(
+          essayPointsTotal + totalPracticePoints
+        ).toFixed(2)} điểm): Chấm theo đáp án mẫu và biểu điểm thực hành từng câu.`,
+      },
+    };
+
+    const targetClsList =
+      selectedClassNames.length > 0 ? selectedClassNames : [className];
+    const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
+
+    const newAsg: Assignment = {
+      id: `asg-sem-manual-${Date.now()}`,
+      code: `DeThi_${semesterType.replace(/\s+/g, "")}_${grade.replace(/\s+/g, "")}`,
+      title: manualExam.title,
+      grade,
+      className: formattedClsLabel,
+      targetClassNames: targetClsList,
+      fileType: "theory",
+      isSemesterExam: true,
+      studentPrompt: `ĐỀ THI ĐỊNH KỲ ${semesterType.toUpperCase()} (${semesterDuration} phút) — Phần I: Trắc nghiệm (${
+        manualExam.multipleChoice.length
+      } câu); Phần II: Tự luận (${shortAnswers.length} câu) & Thực hành (${
+        practiceTasks.length
+      } bài). Em hãy hoàn thành tất cả các câu hỏi trước khi bấm Nộp bài nhé!`,
+      standardFileNamePattern: `MaHS_HoTen_${formattedClsLabel.replace(
+        /\s+/g,
+        ""
+      )}_DeThiHocKy.json`,
+      checklist: buildTheoryChecklistFromExam(manualExam),
+      theoryExam: manualExam,
+    };
+
+    setGeneratedAssignment(newAsg);
+    setSavedNotice(
+      "Đã khởi tạo Khung Đề Thi Học Kỳ Nhập Tay theo đúng tỷ lệ LT/TH đã chọn! Thầy có thể gõ nội dung từng câu hỏi trắc nghiệm, tự luận, bài thực hành ở khung bên phải rồi bấm Xác nhận & Giao đề."
+    );
   };
 
   const handleAddMorePracticeTask = () => {
@@ -2257,14 +2620,191 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     }
   };
 
+  const handleCycleMcqIllustration = (qIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const targetQ = exam.multipleChoice[qIdx];
+    if (!targetQ) return;
+    const nextVariant = ((targetQ.illustrationVariant ?? 0) + 1) % 5;
+    const nextCaption = cleanIllustrationCaption(
+      targetQ.illustrationNote || "",
+      targetQ.question
+    );
+    const nextDataUrl = generateIllustrationDataUrl(
+      targetQ.question,
+      nextCaption,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextMcqs = exam.multipleChoice.map((q, idx) =>
+      idx === qIdx
+        ? {
+            ...q,
+            illustrationNote: nextCaption,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+          }
+        : q
+    );
+    syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+  };
+
+  const handleCycleEssayIllustration = (eIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const currentEssays = getActiveShortAnswers(exam);
+    const targetEq = currentEssays[eIdx];
+    if (!targetEq) return;
+    const nextVariant = ((targetEq.illustrationVariant ?? 0) + 1) % 5;
+    const nextCaption = cleanIllustrationCaption(
+      targetEq.illustrationNote || "",
+      targetEq.question
+    );
+    const nextDataUrl = generateIllustrationDataUrl(
+      targetEq.question,
+      nextCaption,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextEssays = currentEssays.map((eq, idx) =>
+      idx === eIdx
+        ? {
+            ...eq,
+            illustrationNote: nextCaption,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+          }
+        : eq
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      shortAnswers: nextEssays,
+      shortAnswer: nextEssays[0] || exam.shortAnswer,
+    });
+  };
+
+  const handleUploadEssayCustomImage = (
+    eIdx: number,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file || !generatedAssignment?.theoryExam) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        const exam = generatedAssignment.theoryExam!;
+        const currentEssays = getActiveShortAnswers(exam);
+        const nextEssays = currentEssays.map((eq, idx) =>
+          idx === eIdx
+            ? {
+                ...eq,
+                illustrationImageDataUrl: reader.result as string,
+              }
+            : eq
+        );
+        syncTheoryExamAndChecklist({
+          ...exam,
+          shortAnswers: nextEssays,
+          shortAnswer: nextEssays[0] || exam.shortAnswer,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const handleCyclePracticeIllustration = (pIdx: number) => {
+    if (!generatedAssignment?.theoryExam?.semesterBlueprint) return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    const targetPt = bp.practiceTasks[pIdx];
+    if (!targetPt) return;
+    const nextVariant = ((targetPt.illustrationVariant ?? 0) + 1) % 5;
+    const nextCaption = cleanIllustrationCaption(
+      targetPt.illustrationNote || "",
+      `${targetPt.title} ${targetPt.instructions}`
+    );
+    const nextDataUrl = generateIllustrationDataUrl(
+      `${targetPt.title} ${targetPt.instructions}`,
+      nextCaption,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextTasks = bp.practiceTasks.map((pt, idx) =>
+      idx === pIdx
+        ? {
+            ...pt,
+            illustrationNote: nextCaption,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+          }
+        : pt
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+  };
+
+  const handleUploadPracticeCustomImage = (
+    pIdx: number,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file || !generatedAssignment?.theoryExam?.semesterBlueprint) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        const exam = generatedAssignment.theoryExam!;
+        const bp = exam.semesterBlueprint!;
+        const nextTasks = bp.practiceTasks.map((pt, idx) =>
+          idx === pIdx
+            ? {
+                ...pt,
+                illustrationImageDataUrl: reader.result as string,
+              }
+            : pt
+        );
+        syncTheoryExamAndChecklist({
+          ...exam,
+          semesterBlueprint: {
+            ...bp,
+            practiceTasks: nextTasks,
+          },
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
   const handleAssignToClass = () => {
     if (!generatedAssignment) return;
-    const alreadyInBank = assignments.some((a) => a.id === generatedAssignment.id);
-    onAddAssignment(generatedAssignment);
+    const finalTargets =
+      generatedAssignment.targetClassNames && generatedAssignment.targetClassNames.length > 0
+        ? generatedAssignment.targetClassNames
+        : selectedClassNames.length > 0
+        ? selectedClassNames
+        : [generatedAssignment.className];
+    const finalClassLabel = formatTargetClassesLabel(
+      finalTargets,
+      generatedAssignment.grade
+    );
+    const updatedAsg: Assignment = {
+      ...generatedAssignment,
+      className: finalClassLabel,
+      targetClassNames: finalTargets,
+    };
+    setGeneratedAssignment(updatedAsg);
+    const alreadyInBank = assignments.some((a) => a.id === updatedAsg.id);
+    onAddAssignment(updatedAsg);
     setSavedNotice(
       alreadyInBank
-        ? `Đã lưu cập nhật nội dung & ma trận đề "${generatedAssignment.title}" cho ${generatedAssignment.className}!`
-        : `Đã xác nhận & giao đề "${generatedAssignment.title}" cho ${generatedAssignment.className}! Học sinh thuộc khối ${generatedAssignment.grade} có thể làm bài ngay bên Cổng Học sinh.`
+        ? `Đã lưu cập nhật nội dung & ma trận đề "${updatedAsg.title}" (Giao cho: ${finalTargets.join(", ")})!`
+        : `Đã xác nhận & giao đề "${updatedAsg.title}" cho ${finalTargets.length} lớp (${finalTargets.join(", ")})! Học sinh thuộc các lớp này có thể làm bài ngay bên Cổng Học sinh.`
     );
   };
 
@@ -2338,32 +2878,78 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
               <div className="p-2.5 bg-sky-50/70 border border-sky-200 rounded-lg text-[11px] text-slate-700">
                 <span className="font-bold text-[#0284C7]">
-                  Phạm vi chương trình {grade} (Bước 1) · {activeTopicObj.code} (Bước 3):
+                  Phạm vi chương trình {grade} (Bước 1) · Đang chọn {selectedTopicObjs.length} chủ đề ({selectedTopicsShortCodes}) ở Bước 3:
                 </span>{" "}
-                <span>{activeTopicObj.lessonsSummary}</span>
+                <span>{selectedTopicsLessonsSummary}</span>
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">
-                  Lớp nhận bài giao:
-                </label>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label className="block text-xs font-medium text-slate-600">
+                    Click chọn các lớp nhận đề trong cùng {grade}:
+                  </label>
+                  {matchingClassesForGrade.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={selectAllClassesInGrade}
+                        className="text-[11px] font-bold text-[#0284C7] hover:underline cursor-pointer"
+                      >
+                        Chọn cả khối ({matchingClassesForGrade.length} lớp)
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={selectSingleFirstClassInGrade}
+                        className="text-[11px] font-semibold text-slate-600 hover:underline cursor-pointer"
+                      >
+                        Chọn 1 lớp
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {matchingClassesForGrade.length > 0 ? (
-                  <select
-                    value={className}
-                    onChange={(e) => setClassName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-[#0284C7]"
-                  >
-                    {matchingClassesForGrade.map((c) => (
-                      <option key={c.id} value={c.name}>
-                        {c.name} ({c.grade} — {c.students.length} học sinh)
-                      </option>
-                    ))}
-                  </select>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                      {matchingClassesForGrade.map((c) => {
+                        const isChecked = selectedClassNames.includes(c.name);
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => toggleTargetClass(c.name)}
+                            className={`px-2.5 py-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                              isChecked
+                                ? "border-[#0284C7] bg-sky-50 text-[#0284C7] shadow-2xs"
+                                : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                            }`}
+                          >
+                            {isChecked ? (
+                              <CheckSquare className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                            ) : (
+                              <Square className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            )}
+                            <span className="truncate">{c.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="px-2.5 py-1.5 bg-sky-50/70 border border-sky-200 rounded-lg text-[11px] text-slate-700">
+                      Đang chọn giao:{" "}
+                      <strong className="text-[#0284C7]">
+                        {selectedClassNames.length}/{matchingClassesForGrade.length} lớp
+                      </strong>{" "}
+                      ({selectedClassNames.join(", ")})
+                    </div>
+                  </div>
                 ) : (
                   <input
                     type="text"
                     value={className}
-                    onChange={(e) => setClassName(e.target.value)}
+                    onChange={(e) => {
+                      setClassName(e.target.value);
+                      setSelectedClassNames([e.target.value]);
+                    }}
                     className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-[#0284C7]"
                   />
                 )}
@@ -2474,21 +3060,100 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    Chủ đề trọng tâm ở Bước 3 ({grade}):
-                  </label>
-                  <select
-                    value={selectedTopicId}
-                    onChange={(e) => handleTopicChange(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-semibold bg-white border border-sky-300 rounded-lg text-slate-900 focus:outline-none focus:border-[#0284C7]"
-                  >
-                    {currentGradeTopics.map((topic) => (
-                      <option key={topic.id} value={topic.id}>
-                        {topic.title}
-                      </option>
-                    ))}
-                  </select>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="block text-[11px] font-bold text-slate-700">
+                      Click chọn 1 hoặc nhiều Chủ đề ở Bước 3 ({grade}):
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("all")}
+                        className="text-[11px] font-bold text-[#0284C7] hover:underline cursor-pointer"
+                      >
+                        Chọn cả 6 chủ đề
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("hk1")}
+                        className="text-[11px] font-semibold text-slate-700 hover:underline cursor-pointer"
+                      >
+                        HK I (CĐ 1–3)
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("hk2")}
+                        className="text-[11px] font-semibold text-slate-700 hover:underline cursor-pointer"
+                      >
+                        HK II (CĐ 4–6)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {currentGradeTopics.map((topic) => {
+                      const isChecked = selectedTopicIds.includes(topic.id);
+                      return (
+                        <button
+                          key={topic.id}
+                          type="button"
+                          onClick={() => handleToggleTopicSelection(topic.id)}
+                          className={`p-2.5 rounded-lg border text-left text-xs transition-all cursor-pointer flex items-start gap-2 ${
+                            isChecked
+                              ? "border-[#0284C7] bg-white text-slate-900 shadow-2xs"
+                              : "border-sky-200/80 bg-white/60 text-slate-600 hover:bg-white"
+                          }`}
+                        >
+                          {isChecked ? (
+                            <CheckSquare className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-900">{topic.title}</div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {topic.lessonsSummary}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="px-2.5 py-1.5 bg-white border border-sky-200 rounded-lg text-[11px] text-slate-700">
+                    Đang chọn:{" "}
+                    <strong className="text-[#0284C7]">
+                      {selectedTopicObjs.length}/{currentGradeTopics.length} chủ đề
+                    </strong>{" "}
+                    ({selectedTopicsShortCodes})
+                  </div>
+
+                  {topicWithSubtracks && topicWithSubtracks.subtracks && (
+                    <div className="p-2.5 bg-amber-50/80 border border-amber-200 rounded-lg space-y-1.5">
+                      <span className="text-[11px] font-bold text-amber-900 flex items-center gap-1">
+                        <Layers className="w-3.5 h-3.5" />
+                        Phân hóa Chủ đề 5 (Lớp 5 - Chọn mạch nội dung):
+                      </span>
+                      <div className="grid grid-cols-1 gap-1">
+                        {topicWithSubtracks.subtracks.map((sub) => (
+                          <button
+                            key={sub.id}
+                            type="button"
+                            onClick={() => handleSubtrackChange(sub.id)}
+                            className={`w-full p-1.5 rounded border text-left text-[11px] font-semibold transition-colors cursor-pointer ${
+                              selectedSubtrackId === sub.id
+                                ? "border-amber-600 bg-white text-amber-950"
+                                : "border-transparent bg-amber-100/50 text-amber-900 hover:bg-amber-100"
+                            }`}
+                          >
+                            ● {sub.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2.5">
@@ -2523,15 +3188,17 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                 </div>
 
                 {/* Tỷ lệ Lý thuyết - Thực hành */}
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <label className="block text-[11px] font-bold text-slate-700">
                     1. Tỷ lệ điểm Lý thuyết / Thực hành (Tổng = 100%):
                   </label>
-                  <div className="grid grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                     {[
-                      { lt: 50, th: 50, label: "50% LT - 50% TH" },
+                      { lt: 70, th: 30, label: "70% LT - 30% TH" },
                       { lt: 60, th: 40, label: "60% LT - 40% TH" },
+                      { lt: 50, th: 50, label: "50% LT - 50% TH" },
                       { lt: 40, th: 60, label: "40% LT - 60% TH" },
+                      { lt: 30, th: 70, label: "30% LT - 70% TH" },
                     ].map((ratio) => (
                       <button
                         key={ratio.label}
@@ -2540,8 +3207,9 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           setSemesterTheoryPercent(ratio.lt);
                           setSemesterPracticePercent(ratio.th);
                         }}
-                        className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border cursor-pointer ${
-                          semesterTheoryPercent === ratio.lt
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors ${
+                          semesterTheoryPercent === ratio.lt &&
+                          semesterPracticePercent === ratio.th
                             ? "bg-[#0284C7] text-white border-[#0284C7]"
                             : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
                         }`}
@@ -2549,6 +3217,56 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                         {ratio.label}
                       </button>
                     ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <div className="bg-white px-2.5 py-1.5 rounded-lg border border-sky-200 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-slate-600">
+                        Nhập % Lý thuyết:
+                      </span>
+                      <div className="flex items-center gap-0.5">
+                        <input
+                          type="number"
+                          min={10}
+                          max={90}
+                          step={5}
+                          value={semesterTheoryPercent}
+                          onChange={(e) => {
+                            const lt = Math.min(
+                              90,
+                              Math.max(10, Number(e.target.value) || 50)
+                            );
+                            setSemesterTheoryPercent(lt);
+                            setSemesterPracticePercent(100 - lt);
+                          }}
+                          className="w-12 text-right text-xs font-mono font-bold text-[#0284C7] focus:outline-none"
+                        />
+                        <span className="text-[10px] font-mono text-slate-500">%</span>
+                      </div>
+                    </div>
+                    <div className="bg-white px-2.5 py-1.5 rounded-lg border border-sky-200 flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-slate-600">
+                        Nhập % Thực hành:
+                      </span>
+                      <div className="flex items-center gap-0.5">
+                        <input
+                          type="number"
+                          min={10}
+                          max={90}
+                          step={5}
+                          value={semesterPracticePercent}
+                          onChange={(e) => {
+                            const th = Math.min(
+                              90,
+                              Math.max(10, Number(e.target.value) || 50)
+                            );
+                            setSemesterPracticePercent(th);
+                            setSemesterTheoryPercent(100 - th);
+                          }}
+                          className="w-12 text-right text-xs font-mono font-bold text-emerald-700 focus:outline-none"
+                        />
+                        <span className="text-[10px] font-mono text-slate-500">%</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2743,26 +3461,85 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                   </div>
                 )}
 
-                <select
-                  value={selectedTopicId}
-                  onChange={(e) => handleTopicChange(e.target.value)}
-                  className="w-full px-3.5 py-2.5 text-xs font-semibold bg-sky-50/60 border-2 border-sky-200 rounded-xl text-slate-900 focus:outline-none focus:border-[#0284C7]"
-                >
-                  {currentGradeTopics.map((topic) => (
-                    <option key={topic.id} value={topic.id}>
-                      {topic.title}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Click chọn 1 hoặc nhiều Chủ đề SGK {grade}:
+                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("all")}
+                        className="text-[11px] font-bold text-[#0284C7] hover:underline cursor-pointer"
+                      >
+                        Chọn cả 6 chủ đề
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("hk1")}
+                        className="text-[11px] font-semibold text-slate-700 hover:underline cursor-pointer"
+                      >
+                        HK I (CĐ 1–3)
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={() => handleSelectTopicPreset("hk2")}
+                        className="text-[11px] font-semibold text-slate-700 hover:underline cursor-pointer"
+                      >
+                        HK II (CĐ 4–6)
+                      </button>
+                    </div>
+                  </div>
 
-                {activeTopicObj.subtracks && activeTopicObj.subtracks.length > 0 && (
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {currentGradeTopics.map((topic) => {
+                      const isChecked = selectedTopicIds.includes(topic.id);
+                      return (
+                        <button
+                          key={topic.id}
+                          type="button"
+                          onClick={() => handleToggleTopicSelection(topic.id)}
+                          className={`p-2.5 rounded-xl border text-left text-xs transition-all cursor-pointer flex items-start gap-2 ${
+                            isChecked
+                              ? "border-[#0284C7] bg-sky-50/70 text-slate-900 shadow-2xs"
+                              : "border-slate-200 bg-slate-50/70 text-slate-600 hover:bg-slate-100"
+                          }`}
+                        >
+                          {isChecked ? (
+                            <CheckSquare className="w-4 h-4 text-[#0284C7] shrink-0 mt-0.5" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-900">{topic.title}</div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {topic.lessonsSummary}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="px-2.5 py-1.5 bg-sky-50/70 border border-sky-200 rounded-lg text-[11px] text-slate-700">
+                    Đang chọn:{" "}
+                    <strong className="text-[#0284C7]">
+                      {selectedTopicObjs.length}/{currentGradeTopics.length} chủ đề
+                    </strong>{" "}
+                    ({selectedTopicsShortCodes})
+                  </div>
+                </div>
+
+                {topicWithSubtracks && topicWithSubtracks.subtracks && (
                   <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
                     <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
                       <Layers className="w-3.5 h-3.5" />
                       Phân hóa Chủ đề 5 (Lớp 5 - Chọn mạch nội dung):
                     </span>
                     <div className="space-y-1.5">
-                      {activeTopicObj.subtracks.map((sub) => (
+                      {topicWithSubtracks.subtracks.map((sub) => (
                         <button
                           key={sub.id}
                           type="button"
@@ -3038,20 +3815,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
                 <div>
                   <label className="block text-[11px] font-bold text-slate-800 mb-1">
-                    2. Ý tưởng riêng của giáo viên:
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={teacherCustomIdeaNote}
-                    onChange={(e) => setTeacherCustomIdeaNote(e.target.value)}
-                    placeholder="Ví dụ: Câu hỏi tự luận số 2 cần xoay quanh tình huống thực tế học sinh lưu nhầm tệp ra màn hình Desktop thay vì thư mục cá nhân, yêu cầu học sinh nêu cách xử lý."
-                    className="w-full p-2.5 text-xs bg-white border border-amber-300 rounded-lg text-slate-900 focus:outline-none focus:border-[#0284C7]"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-800 mb-1">
-                    3. Yêu cầu ràng buộc:
+                    2. Yêu cầu ràng buộc:
                   </label>
                   <input
                     type="text"
@@ -3092,37 +3856,52 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               </div>
             )}
 
-            <button
-              type="submit"
-              disabled={isGenerating}
-              className="w-full py-3.5 px-4 bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-60 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shadow-xs"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+            <div className="space-y-2.5">
+              <button
+                type="submit"
+                disabled={isGenerating}
+                className="w-full py-3.5 px-4 bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-60 text-white text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shadow-xs"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>
+                      {builderMode === "semester"
+                        ? "Chuyên gia AI đang đọc Ma trận & biên soạn Đề thi học kỳ..."
+                        : builderMode === "monthly"
+                        ? `Trợ lý AI đang biên soạn Bài kiểm tra ${monthlyExamMonth}...`
+                        : "Trợ lý AI đang thiết kế đề & ma trận chấm..."}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>
+                      {builderMode === "semester"
+                        ? `Tạo đề thi học kỳ bằng AI (${semesterType} - ${grade})`
+                        : builderMode === "monthly"
+                        ? `Tạo Bài Kiểm Tra Hàng Tháng (${monthlyExamMonth.split("(")[0].trim()} - ${grade})`
+                        : builderMode === "practice"
+                        ? `Tạo Bản Nháp File Mẫu (.${fileType.toUpperCase()}) & ${practiceTaskCount} Câu Thực Hành`
+                        : `Tạo Bản Nháp Đề Lý Thuyết (${theoryQuestionCount} Câu TN + ${theoryEssayCount} Tự Luận)`}
+                    </span>
+                  </>
+                )}
+              </button>
+
+              {builderMode === "semester" && (
+                <button
+                  type="button"
+                  onClick={handleCreateManualSemesterExam}
+                  className="w-full py-3 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border-2 border-emerald-300 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4 text-emerald-700" />
                   <span>
-                    {builderMode === "semester"
-                      ? "Chuyên gia AI đang đọc Ma trận & biên soạn Đề thi học kỳ..."
-                      : builderMode === "monthly"
-                      ? `Trợ lý AI đang biên soạn Bài kiểm tra ${monthlyExamMonth}...`
-                      : "Trợ lý AI đang thiết kế đề & ma trận chấm..."}
+                    ✍️ Tự nhập tay Đề thi học kỳ ({theoryQuestionCount} câu TN, {theoryEssayCount} câu TL, {semesterPracticeCount} bài TH · {semesterTheoryPercent}% LT - {semesterPracticePercent}% TH)
                   </span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4" />
-                  <span>
-                    {builderMode === "semester"
-                      ? `Tạo đề thi học kỳ (${semesterType} - ${grade})`
-                      : builderMode === "monthly"
-                      ? `Tạo Bài Kiểm Tra Hàng Tháng (${monthlyExamMonth.split("(")[0].trim()} - ${grade})`
-                      : builderMode === "practice"
-                      ? `Tạo Bản Nháp File Mẫu (.${fileType.toUpperCase()}) & ${practiceTaskCount} Câu Thực Hành`
-                      : `Tạo Bản Nháp Đề Lý Thuyết (${theoryQuestionCount} Câu TN + ${theoryEssayCount} Tự Luận)`}
-                  </span>
-                </>
+                </button>
               )}
-            </button>
+            </div>
           </form>
         </div>
 
@@ -3268,19 +4047,55 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                      Lớp nhận đề ({generatedAssignment.grade}):
+                      Click chọn các lớp nhận đề ({generatedAssignment.grade}):
                     </label>
-                    <input
-                      type="text"
-                      value={generatedAssignment.className}
-                      onChange={(e) =>
-                        setGeneratedAssignment({
-                          ...generatedAssignment,
-                          className: e.target.value,
-                        })
-                      }
-                      className="w-full px-3 py-2 text-xs font-semibold bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:border-[#0284C7]"
-                    />
+                    <div className="flex flex-wrap gap-1.5">
+                      {classes
+                        .filter((c) => c.grade === generatedAssignment.grade)
+                        .map((cls) => {
+                          const currentTargets =
+                            generatedAssignment.targetClassNames &&
+                            generatedAssignment.targetClassNames.length > 0
+                              ? generatedAssignment.targetClassNames
+                              : selectedClassNames;
+                          const isChecked = currentTargets.includes(cls.name);
+                          return (
+                            <button
+                              key={cls.id}
+                              type="button"
+                              onClick={() => {
+                                const exists = currentTargets.includes(cls.name);
+                                const nextTargets = exists
+                                  ? currentTargets.length > 1
+                                    ? currentTargets.filter((n) => n !== cls.name)
+                                    : currentTargets
+                                  : [...currentTargets, cls.name];
+                                setSelectedClassNames(nextTargets);
+                                setGeneratedAssignment({
+                                  ...generatedAssignment,
+                                  targetClassNames: nextTargets,
+                                  className: formatTargetClassesLabel(
+                                    nextTargets,
+                                    generatedAssignment.grade
+                                  ),
+                                });
+                              }}
+                              className={`px-2 py-1 rounded-lg border text-xs font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors ${
+                                isChecked
+                                  ? "border-[#0284C7] bg-sky-50 text-[#0284C7]"
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
+                              }`}
+                            >
+                              {isChecked ? (
+                                <CheckSquare className="w-3 h-3 text-[#0284C7]" />
+                              ) : (
+                                <Square className="w-3 h-3 text-slate-400" />
+                              )}
+                              <span>{cls.name}</span>
+                            </button>
+                          );
+                        })}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3370,51 +4185,71 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           )}
                         </div>
 
-                        {/* THẺ CHÚ THÍCH [HÌNH ẢNH MINH HỌA: ...] */}
+                        {/* HÌNH ẢNH MINH HỌA TỰ ĐỘNG CỦA HỆ THỐNG + NÚT ĐỔI HÌNH KHÁC */}
                         <div className="p-3 bg-sky-50/80 border border-dashed border-sky-300 rounded-xl space-y-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <label className="text-[11px] font-bold text-[#0284C7] flex items-center gap-1">
                               <ImageIcon className="w-3.5 h-3.5" />
-                              Chú thích Hình ảnh minh họa dưới câu hỏi (Theo chuẩn Đề thi Học kỳ):
+                              Hình ảnh minh họa tự động cho Câu {idx + 1} (Có thể đổi hình khác):
                             </label>
-                            <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-sky-300 rounded-lg cursor-pointer">
-                              <Upload className="w-3 h-3 text-[#0284C7]" />
-                              <span>Chèn ảnh minh họa từ máy</span>
-                              <input
-                                type="file"
-                                accept="image/*"
-                                onChange={(e) => handleUploadMcqIllustrationImage(idx, e)}
-                                className="hidden"
-                              />
-                            </label>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCycleMcqIllustration(idx)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-white hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                Đổi hình minh họa khác (Mẫu {((q.illustrationVariant ?? 0) % 5) + 1}/5)
+                              </button>
+                              <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-sky-300 rounded-lg cursor-pointer">
+                                <Upload className="w-3 h-3 text-[#0284C7]" />
+                                <span>Tải ảnh từ máy</span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => handleUploadMcqIllustrationImage(idx, e)}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
                           </div>
-                          <input
-                            type="text"
-                            value={q.illustrationNote || ""}
-                            onChange={(e) =>
-                              handleUpdateMcqField(idx, "illustrationNote", e.target.value)
-                            }
-                            placeholder="[HÌNH ẢNH MINH HỌA: Mô tả chi tiết hình ảnh biểu tượng phần mềm, giao diện Word/Paint/Scratch cần có...]"
-                            className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-sky-200 rounded-lg text-sky-900 focus:outline-none focus:border-[#0284C7]"
-                          />
+
                           {q.illustrationImageDataUrl && (
-                            <div className="flex items-center gap-3 pt-1">
+                            <div className="flex items-center justify-center bg-white p-2 rounded-lg border border-sky-200">
                               <img
                                 src={q.illustrationImageDataUrl}
                                 alt="Minh họa câu hỏi"
-                                className="max-h-32 rounded-lg border border-sky-200 bg-white p-1 object-contain"
+                                className="max-h-40 rounded-lg object-contain"
                               />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleUpdateMcqField(idx, "illustrationImageDataUrl", "")
-                                }
-                                className="text-[11px] font-semibold text-red-600 hover:underline cursor-pointer"
-                              >
-                                Xóa ảnh đã chèn
-                              </button>
                             </div>
                           )}
+
+                          <input
+                            type="text"
+                            value={q.illustrationNote || ""}
+                            onChange={(e) => {
+                              const nextNote = e.target.value;
+                              const exam = generatedAssignment.theoryExam!;
+                              const nextDataUrl = generateIllustrationDataUrl(
+                                q.question,
+                                nextNote,
+                                q.illustrationVariant ?? 0,
+                                generatedAssignment.grade
+                              );
+                              const nextMcqs = exam.multipleChoice.map((item, qI) =>
+                                qI === idx
+                                  ? {
+                                      ...item,
+                                      illustrationNote: nextNote,
+                                      illustrationImageDataUrl: nextDataUrl,
+                                    }
+                                  : item
+                              );
+                              syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+                            }}
+                            placeholder="Mô tả nội dung hình minh họa (hệ thống tự động vẽ lại theo mô tả)..."
+                            className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900 focus:outline-none focus:border-[#0284C7]"
+                          />
                         </div>
 
                         <div className="space-y-1.5">
@@ -3483,14 +4318,26 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           : ""}
                         )
                       </h4>
-                      <button
-                        type="button"
-                        onClick={handleAddMoreEssayQuestion}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-900 bg-white hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                      >
-                        <PlusCircle className="w-3.5 h-3.5 text-[#0284C7]" />
-                        + Thêm câu tự luận
-                      </button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleAddMoreEssayQuestion}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-900 bg-white hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5 text-[#0284C7]" />
+                          + Thêm câu tự luận
+                        </button>
+                        {generatedAssignment.theoryExam.semesterBlueprint && (
+                          <button
+                            type="button"
+                            onClick={handleAddSemesterPracticeTask}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-950 bg-emerald-100 hover:bg-emerald-200 rounded-lg transition-colors cursor-pointer"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5 text-emerald-700" />
+                            + Thêm bài thực hành
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Danh sách câu hỏi Tự luận */}
@@ -3545,18 +4392,74 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           </button>
                         </div>
 
-                        <div>
-                          <label className="block text-[11px] font-semibold text-[#0284C7] mb-1">
-                            Chú thích [HÌNH ẢNH MINH HỌA] cho câu tự luận (nếu có):
-                          </label>
+                        <div className="p-3 bg-white border border-sky-200 rounded-xl space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <label className="text-[11px] font-bold text-[#0284C7] flex items-center gap-1">
+                              <ImageIcon className="w-3.5 h-3.5" />
+                              Hình ảnh minh họa tự động cho câu tự luận {sIdx + 1} (Có thể đổi hình khác):
+                            </label>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => handleCycleEssayIllustration(sIdx)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                Đổi hình minh họa khác (Mẫu {((sa.illustrationVariant ?? 0) % 5) + 1}/5)
+                              </button>
+                              <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer">
+                                <Upload className="w-3 h-3 text-slate-600" />
+                                <span>Tải ảnh từ máy</span>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => handleUploadEssayCustomImage(sIdx, e)}
+                                  className="hidden"
+                                />
+                              </label>
+                            </div>
+                          </div>
+
+                          {sa.illustrationImageDataUrl && (
+                            <div className="bg-slate-50 p-2 rounded-lg border border-sky-200 flex justify-center">
+                              <img
+                                src={sa.illustrationImageDataUrl}
+                                alt={`Minh họa tự luận ${sIdx + 1}`}
+                                className="max-h-40 rounded-lg object-contain"
+                              />
+                            </div>
+                          )}
+
                           <input
                             type="text"
                             value={sa.illustrationNote || ""}
-                            onChange={(e) =>
-                              handleUpdateEssayField(sIdx, "illustrationNote", e.target.value)
-                            }
-                            placeholder="[HÌNH ẢNH MINH HỌA: ...]"
-                            className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-sky-200 rounded-lg text-sky-900"
+                            onChange={(e) => {
+                              const nextNote = e.target.value;
+                              const exam = generatedAssignment.theoryExam!;
+                              const nextDataUrl = generateIllustrationDataUrl(
+                                sa.question,
+                                nextNote,
+                                sa.illustrationVariant ?? 0,
+                                generatedAssignment.grade
+                              );
+                              const currentEssays = getActiveShortAnswers(exam);
+                              const nextEssays = currentEssays.map((item, eI) =>
+                                eI === sIdx
+                                  ? {
+                                      ...item,
+                                      illustrationNote: nextNote,
+                                      illustrationImageDataUrl: nextDataUrl,
+                                    }
+                                  : item
+                              );
+                              syncTheoryExamAndChecklist({
+                                ...exam,
+                                shortAnswers: nextEssays,
+                                shortAnswer: nextEssays[0] || exam.shortAnswer,
+                              });
+                            }}
+                            placeholder="Mô tả hình ảnh minh họa..."
+                            className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900"
                           />
                         </div>
 
@@ -3604,17 +4507,51 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           key={pt.id || pIdx}
                           className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl text-xs space-y-3"
                         >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="flex-1">
-                              <span className="inline-block text-[10px] font-bold uppercase text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded mb-1">
-                                PHẦN II — BÀI TẬP THỰC HÀNH TRÊN MÁY TÍNH ({pt.softwareType} · Mức độ: {pt.cognitiveLevel})
-                              </span>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div className="flex-1 min-w-[220px] space-y-1.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-block text-[10px] font-bold uppercase text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                                  PHẦN II — BÀI TẬP THỰC HÀNH {pIdx + 1}
+                                </span>
+                                <select
+                                  value={pt.softwareType || "Word (.docx)"}
+                                  onChange={(e) =>
+                                    handleUpdateSemesterPracticeTask(
+                                      pIdx,
+                                      "softwareType",
+                                      e.target.value as SemesterPracticeTask["softwareType"]
+                                    )
+                                  }
+                                  className="px-2 py-0.5 text-[11px] font-semibold bg-white border border-emerald-300 rounded text-emerald-800"
+                                >
+                                  <option value="Word (.docx)">Word (.docx)</option>
+                                  <option value="PowerPoint (.pptx)">PowerPoint (.pptx)</option>
+                                  <option value="Scratch (.sb3)">Scratch (.sb3)</option>
+                                  <option value="Thực hành tổng hợp">Thực hành tổng hợp</option>
+                                </select>
+                                <select
+                                  value={pt.cognitiveLevel || "Vận dụng"}
+                                  onChange={(e) =>
+                                    handleUpdateSemesterPracticeTask(
+                                      pIdx,
+                                      "cognitiveLevel",
+                                      e.target.value
+                                    )
+                                  }
+                                  className="px-2 py-0.5 text-[11px] font-semibold bg-white border border-emerald-300 rounded text-emerald-800"
+                                >
+                                  <option value="Nhận biết">Mức 1: Nhận biết</option>
+                                  <option value="Thông hiểu">Mức 2: Thông hiểu</option>
+                                  <option value="Vận dụng">Mức 3: Vận dụng</option>
+                                </select>
+                              </div>
                               <input
                                 type="text"
                                 value={pt.title}
                                 onChange={(e) =>
                                   handleUpdateSemesterPracticeTask(pIdx, "title", e.target.value)
                                 }
+                                placeholder="Nhập tiêu đề bài thực hành..."
                                 className="w-full px-3 py-2 text-xs font-bold bg-white border border-emerald-300 rounded-lg text-slate-900"
                               />
                             </div>
@@ -3624,7 +4561,9 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                               </label>
                               <input
                                 type="number"
-                                step="0.5"
+                                step="0.25"
+                                min="0.25"
+                                max="10"
                                 value={pt.points}
                                 onChange={(e) =>
                                   handleUpdateSemesterPracticeTask(
@@ -3636,6 +4575,17 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                 className="w-full px-2 py-2 text-xs font-mono font-bold text-center bg-white border border-emerald-300 rounded-lg text-emerald-700"
                               />
                             </div>
+                            {(generatedAssignment.theoryExam?.semesterBlueprint?.practiceTasks
+                              ?.length || 0) > 1 && (
+                              <button
+                                type="button"
+                                title="Xóa bài thực hành này"
+                                onClick={() => handleRemoveSemesterPracticeTask(pIdx)}
+                                className="mt-5 p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
 
                           <div>
@@ -3656,10 +4606,44 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             />
                           </div>
 
-                          <div>
-                            <label className="block text-[11px] font-semibold text-emerald-800 mb-1">
-                              Chú thích [HÌNH ẢNH MINH HỌA] mẫu bài thực hành:
-                            </label>
+                          <div className="p-3 bg-white border border-emerald-200 rounded-xl space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label className="text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
+                                <ImageIcon className="w-3.5 h-3.5" />
+                                Hình ảnh minh họa mẫu bài thực hành (Có thể đổi hình khác):
+                              </label>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCyclePracticeIllustration(pIdx)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <RefreshCw className="w-3 h-3" />
+                                  Đổi hình minh họa khác (Mẫu {((pt.illustrationVariant ?? 0) % 5) + 1}/5)
+                                </button>
+                                <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer">
+                                  <Upload className="w-3 h-3 text-slate-600" />
+                                  Tải ảnh từ máy
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={(e) => handleUploadPracticeCustomImage(pIdx, e)}
+                                    className="hidden"
+                                  />
+                                </label>
+                              </div>
+                            </div>
+
+                            {pt.illustrationImageDataUrl && (
+                              <div className="bg-slate-50 p-2 rounded-lg border border-emerald-200 flex justify-center">
+                                <img
+                                  src={pt.illustrationImageDataUrl}
+                                  alt={`Minh họa thực hành ${pIdx + 1}`}
+                                  className="max-h-44 w-auto rounded-lg object-contain"
+                                />
+                              </div>
+                            )}
+
                             <input
                               type="text"
                               value={pt.illustrationNote || ""}
@@ -3670,7 +4654,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-emerald-200 rounded-lg text-emerald-900"
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-emerald-200 rounded-lg text-emerald-900"
                             />
                           </div>
 
@@ -3970,7 +4954,16 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          setGeneratedAssignment(asg);
+                          const enrichedAsg = asg.theoryExam
+                            ? {
+                                ...asg,
+                                theoryExam: enrichExamWithAutoIllustrations(
+                                  asg.theoryExam,
+                                  asg.grade
+                                ),
+                              }
+                            : asg;
+                          setGeneratedAssignment(enrichedAsg);
                           setSavedNotice(null);
                         }}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 rounded-lg transition-colors cursor-pointer whitespace-nowrap"

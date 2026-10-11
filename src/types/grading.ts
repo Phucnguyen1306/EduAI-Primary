@@ -20,8 +20,9 @@ export interface MultipleChoiceQuestion {
   explanation: string;
   points: number;
   cognitiveLevel?: CognitiveLevel;
-  illustrationNote?: string; // [HÌNH ẢNH MINH HỌA: Mô tả chi tiết hình ảnh cần có]
-  illustrationImageDataUrl?: string; // Ảnh minh họa do giáo viên chèn (nếu có)
+  illustrationNote?: string;
+  illustrationImageDataUrl?: string;
+  illustrationVariant?: number;
 }
 
 export interface ShortAnswerQuestion {
@@ -32,6 +33,8 @@ export interface ShortAnswerQuestion {
   points: number;
   cognitiveLevel?: CognitiveLevel;
   illustrationNote?: string;
+  illustrationImageDataUrl?: string;
+  illustrationVariant?: number;
   gradingGuide?: string;
 }
 
@@ -42,6 +45,8 @@ export interface SemesterPracticeTask {
   softwareType: "Word (.docx)" | "PowerPoint (.pptx)" | "Scratch (.sb3)" | "Thực hành tổng hợp";
   instructions: string;
   illustrationNote?: string;
+  illustrationImageDataUrl?: string;
+  illustrationVariant?: number;
   points: number;
   gradingRubric: string;
 }
@@ -76,6 +81,7 @@ export interface Assignment {
   title: string;
   grade: GradeLevel;
   className: string;
+  targetClassNames?: string[];
   fileType: PracticeFileType;
   studentPrompt: string;
   standardFileNamePattern: string;

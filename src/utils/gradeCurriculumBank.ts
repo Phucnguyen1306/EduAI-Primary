@@ -3,6 +3,7 @@ import {
   GradeLevel,
   SemesterPracticeTask,
 } from "../types/grading";
+import { cleanQuestionText } from "./examIllustrationEngine";
 
 export interface KnttSubtrackConfig {
   id: string;
@@ -224,7 +225,7 @@ export function parseMcqsFromUploadedText(
 
     if (optA && optB && optC && optD) {
       parsed.push({
-        question: `[${grade} - ${topicCode}] ${qMatch[1].trim()}`,
+        question: cleanQuestionText(qMatch[1].trim()),
         cognitiveLevel:
           parsed.length % 3 === 0
             ? "Nhận biết"
@@ -2283,6 +2284,16 @@ export function getGradeAndTopicPureBank(
   if (uploadedMcqs.length > 0) {
     mcqs = [...uploadedMcqs, ...mcqs];
   }
+
+  mcqs = mcqs.map((q) => ({
+    ...q,
+    question: cleanQuestionText(q.question),
+  }));
+
+  essays = essays.map((sa) => ({
+    ...sa,
+    question: cleanQuestionText(sa.question),
+  }));
 
   return { mcqs, essays, practiceTask };
 }
