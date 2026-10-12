@@ -17,7 +17,11 @@ import {
   INITIAL_TT27_REGULAR_RECORDS,
   INITIAL_TT27_PERIODIC_RECORDS,
 } from "../data/initialData";
-import { syncStateToCodebase } from "../utils/codeSyncEngine";
+import {
+  fetchSystemStateFromCode,
+  loadCachedLocalState,
+  syncStateToCodebase,
+} from "../utils/codeSyncEngine";
 
 interface Circular27AssessmentViewProps {
   classes: ClassRoom[];
@@ -651,16 +655,11 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
   const [regularRecordsByMap, setRegularRecordsByMap] = useState<
     Record<string, RegularMonthlyEvaluationRow[]>
   >(() => {
-    if (
-      INITIAL_TT27_REGULAR_RECORDS &&
-      Object.keys(INITIAL_TT27_REGULAR_RECORDS).length > 0
-    ) {
-      return INITIAL_TT27_REGULAR_RECORDS as Record<
-        string,
-        RegularMonthlyEvaluationRow[]
-      >;
-    }
-    return {};
+    const cached = loadCachedLocalState();
+    return {
+      ...((INITIAL_TT27_REGULAR_RECORDS as Record<string, RegularMonthlyEvaluationRow[]>) || {}),
+      ...((cached?.tt27RegularRecords as Record<string, RegularMonthlyEvaluationRow[]>) || {}),
+    };
   });
   const [isFetchingRegularAI, setIsFetchingRegularAI] = useState<boolean>(false);
   const [regularSaveNotice, setRegularSaveNotice] = useState<string | null>(null);
@@ -671,19 +670,33 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
   const [periodicRecordsByMap, setPeriodicRecordsByMap] = useState<
     Record<string, PeriodicEvaluationRow[]>
   >(() => {
-    if (
-      INITIAL_TT27_PERIODIC_RECORDS &&
-      Object.keys(INITIAL_TT27_PERIODIC_RECORDS).length > 0
-    ) {
-      return INITIAL_TT27_PERIODIC_RECORDS as Record<
-        string,
-        PeriodicEvaluationRow[]
-      >;
-    }
-    return {};
+    const cached = loadCachedLocalState();
+    return {
+      ...((INITIAL_TT27_PERIODIC_RECORDS as Record<string, PeriodicEvaluationRow[]>) || {}),
+      ...((cached?.tt27PeriodicRecords as Record<string, PeriodicEvaluationRow[]>) || {}),
+    };
   });
   const [isFetchingPeriodicAI, setIsFetchingPeriodicAI] = useState<boolean>(false);
   const [periodicSaveNotice, setPeriodicSaveNotice] = useState<string | null>(null);
+
+  // Đồng bộ 2 chiều nhận xét Thông tư 27 từ Server & bộ nhớ khi mở tab
+  useEffect(() => {
+    fetchSystemStateFromCode().then((remote) => {
+      if (!remote) return;
+      if (remote.tt27RegularRecords && Object.keys(remote.tt27RegularRecords).length > 0) {
+        setRegularRecordsByMap((prev) => ({
+          ...remote.tt27RegularRecords,
+          ...prev,
+        }));
+      }
+      if (remote.tt27PeriodicRecords && Object.keys(remote.tt27PeriodicRecords).length > 0) {
+        setPeriodicRecordsByMap((prev) => ({
+          ...remote.tt27PeriodicRecords,
+          ...prev,
+        }));
+      }
+    });
+  }, []);
 
   const regularKey = `${activeClass?.id || "cls"}_${selectedMonth}`;
   const periodicKey = `${activeClass?.id || "cls"}_${selectedPeriodicTerm}`;
@@ -924,11 +937,15 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
       [regularKey]: currentRegularRows,
     };
     setRegularRecordsByMap(updatedMap);
-    syncStateToCodebase({ tt27RegularRecords: updatedMap }).then((r) => {
+    syncStateToCodebase({
+      tt27RegularRecords: updatedMap,
+      actionLabel: `Lưu nhận xét thường xuyên TT27 (${activeClass.name} - Tháng ${selectedMonth})`,
+      actionCategory: "tt27",
+    }).then((r) => {
       if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
     });
     setRegularSaveNotice(
-      `Đã lưu (Ghi) kết quả đánh giá thường xuyên Tháng ${selectedMonth} cho ${activeClass.name} (${currentRegularRows.length} học sinh) trực tiếp vào code hệ thống!`
+      `Đã lưu (Ghi) kết quả đánh giá thường xuyên Tháng ${selectedMonth} cho ${activeClass.name} (${currentRegularRows.length} học sinh) trực tiếp vào hệ thống!`
     );
   };
 

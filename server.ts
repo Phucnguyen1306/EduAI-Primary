@@ -10,6 +10,9 @@ import {
   INITIAL_SUBMISSIONS,
   INITIAL_TT27_REGULAR_RECORDS,
   INITIAL_TT27_PERIODIC_RECORDS,
+  INITIAL_OPERATION_HISTORY,
+  INITIAL_EXAM_BUILDER_DRAFT,
+  INITIAL_DELETED_IDS,
   LAST_CODE_SYNC_AT,
 } from "./src/data/initialData.ts";
 
@@ -27,17 +30,72 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Bộ nhớ đệm trạng thái trực tiếp trên Server (đồng bộ 2 chiều với file src/data/initialData.ts)
-const liveSystemState = {
+const PERSISTENT_BACKUP_PATH = path.join(__dirname, ".eduai-persistent-state.json");
+
+function mergeArrayById<T extends { id: string }>(
+  primary: T[] = [],
+  secondary: T[] = [],
+  deletedIds: string[] = []
+): T[] {
+  const deletedSet = new Set(deletedIds || []);
+  const map = new Map<string, T>();
+  for (const item of secondary || []) {
+    if (item && item.id && !deletedSet.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+  for (const item of primary || []) {
+    if (item && item.id && !deletedSet.has(item.id)) {
+      map.set(item.id, item);
+    }
+  }
+  return Array.from(map.values());
+}
+
+// Bộ nhớ đệm trạng thái trực tiếp trên Server (đồng bộ 2 chiều với file src/data/initialData.ts & .eduai-persistent-state.json)
+const liveSystemState: {
+  lastUpdatedAt: string;
+  lastUpdatedEpoch: number;
+  classes: any[];
+  assignments: any[];
+  submissions: any[];
+  tt27RegularRecords: Record<string, any[]>;
+  tt27PeriodicRecords: Record<string, any[]>;
+  operationHistory: any[];
+  examBuilderDraft: any;
+  deletedIds: {
+    assignments: string[];
+    submissions: string[];
+    classes: string[];
+  };
+} = {
   lastUpdatedAt: LAST_CODE_SYNC_AT || new Date().toLocaleString("vi-VN"),
-  classes: INITIAL_CLASSES,
-  assignments: INITIAL_ASSIGNMENTS,
-  submissions: INITIAL_SUBMISSIONS,
-  tt27RegularRecords: INITIAL_TT27_REGULAR_RECORDS,
-  tt27PeriodicRecords: INITIAL_TT27_PERIODIC_RECORDS,
+  lastUpdatedEpoch: Date.now(),
+  classes: INITIAL_CLASSES || [],
+  assignments: INITIAL_ASSIGNMENTS || [],
+  submissions: INITIAL_SUBMISSIONS || [],
+  tt27RegularRecords: INITIAL_TT27_REGULAR_RECORDS || {},
+  tt27PeriodicRecords: INITIAL_TT27_PERIODIC_RECORDS || {},
+  operationHistory: INITIAL_OPERATION_HISTORY || [],
+  examBuilderDraft: INITIAL_EXAM_BUILDER_DRAFT || null,
+  deletedIds: INITIAL_DELETED_IDS || {
+    assignments: [],
+    submissions: [],
+    classes: [],
+  },
 };
 
 function writeStateToInitialDataTs() {
+  try {
+    fs.writeFileSync(
+      PERSISTENT_BACKUP_PATH,
+      JSON.stringify(liveSystemState, null, 2),
+      "utf8"
+    );
+  } catch (err) {
+    console.error("Warning writing .eduai-persistent-state.json:", err);
+  }
+
   const initialDataPath = path.join(__dirname, "src", "data", "initialData.ts");
   const fileContent = `import type { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
@@ -57,7 +115,7 @@ export const LAST_CODE_SYNC_TIMESTAMP: string = ${JSON.stringify(liveSystemState
 export const INITIAL_CLASSES: ClassRoom[] = ${JSON.stringify(liveSystemState.classes, null, 2)};
 
 /**
- * Dữ liệu đề kiểm tra, bài nộp và nhận xét Thông tư 27 được tự động cập nhật vào code
+ * Dữ liệu đề kiểm tra, bài nộp, nhận xét Thông tư 27 và lịch sử thao tác được tự động cập nhật vào code
  * trong quá trình người dùng thao tác đến thời điểm đang sử dụng (${liveSystemState.lastUpdatedAt}).
  */
 export const INITIAL_ASSIGNMENTS: Assignment[] = ${JSON.stringify(liveSystemState.assignments, null, 2)};
@@ -67,9 +125,110 @@ export const INITIAL_SUBMISSIONS: StudentSubmission[] = ${JSON.stringify(liveSys
 export const INITIAL_TT27_REGULAR_RECORDS: Record<string, any[]> = ${JSON.stringify(liveSystemState.tt27RegularRecords, null, 2)};
 
 export const INITIAL_TT27_PERIODIC_RECORDS: Record<string, any[]> = ${JSON.stringify(liveSystemState.tt27PeriodicRecords, null, 2)};
+
+export const INITIAL_OPERATION_HISTORY: any[] = ${JSON.stringify(liveSystemState.operationHistory, null, 2)};
+
+export const INITIAL_EXAM_BUILDER_DRAFT: any = ${JSON.stringify(liveSystemState.examBuilderDraft, null, 2)};
+
+export const INITIAL_DELETED_IDS: {
+  assignments: string[];
+  submissions: string[];
+  classes: string[];
+} = ${JSON.stringify(liveSystemState.deletedIds, null, 2)};
 `;
   fs.writeFileSync(initialDataPath, fileContent, "utf8");
 }
+
+// Tự động khôi phục từ .eduai-persistent-state.json khi khởi động Server nếu file backup có dữ liệu thao tác trước đó
+function restoreFromPersistentBackupOnBoot() {
+  try {
+    if (!fs.existsSync(PERSISTENT_BACKUP_PATH)) {
+      writeStateToInitialDataTs();
+      return;
+    }
+    const raw = fs.readFileSync(PERSISTENT_BACKUP_PATH, "utf8");
+    const backup = JSON.parse(raw);
+    if (!backup || typeof backup !== "object") return;
+
+    const mergedDeleted = {
+      assignments: Array.from(
+        new Set([
+          ...(liveSystemState.deletedIds?.assignments || []),
+          ...(backup.deletedIds?.assignments || []),
+        ])
+      ),
+      submissions: Array.from(
+        new Set([
+          ...(liveSystemState.deletedIds?.submissions || []),
+          ...(backup.deletedIds?.submissions || []),
+        ])
+      ),
+      classes: Array.from(
+        new Set([
+          ...(liveSystemState.deletedIds?.classes || []),
+          ...(backup.deletedIds?.classes || []),
+        ])
+      ),
+    };
+    liveSystemState.deletedIds = mergedDeleted;
+
+    if (Array.isArray(backup.classes) && backup.classes.length > 0) {
+      liveSystemState.classes = mergeArrayById(
+        backup.classes,
+        liveSystemState.classes,
+        mergedDeleted.classes
+      );
+    }
+    if (Array.isArray(backup.assignments) && backup.assignments.length > 0) {
+      liveSystemState.assignments = mergeArrayById(
+        backup.assignments,
+        liveSystemState.assignments,
+        mergedDeleted.assignments
+      );
+    }
+    if (Array.isArray(backup.submissions) && backup.submissions.length > 0) {
+      liveSystemState.submissions = mergeArrayById(
+        backup.submissions,
+        liveSystemState.submissions,
+        mergedDeleted.submissions
+      );
+    }
+    if (backup.tt27RegularRecords && typeof backup.tt27RegularRecords === "object") {
+      liveSystemState.tt27RegularRecords = {
+        ...liveSystemState.tt27RegularRecords,
+        ...backup.tt27RegularRecords,
+      };
+    }
+    if (backup.tt27PeriodicRecords && typeof backup.tt27PeriodicRecords === "object") {
+      liveSystemState.tt27PeriodicRecords = {
+        ...liveSystemState.tt27PeriodicRecords,
+        ...backup.tt27PeriodicRecords,
+      };
+    }
+    if (Array.isArray(backup.operationHistory) && backup.operationHistory.length > 0) {
+      liveSystemState.operationHistory = mergeArrayById(
+        backup.operationHistory,
+        liveSystemState.operationHistory,
+        []
+      ).slice(0, 200);
+    }
+    if (backup.examBuilderDraft && !liveSystemState.examBuilderDraft) {
+      liveSystemState.examBuilderDraft = backup.examBuilderDraft;
+    }
+    if (backup.lastUpdatedAt) {
+      liveSystemState.lastUpdatedAt = backup.lastUpdatedAt;
+    }
+    if (typeof backup.lastUpdatedEpoch === "number") {
+      liveSystemState.lastUpdatedEpoch = backup.lastUpdatedEpoch;
+    }
+
+    writeStateToInitialDataTs();
+  } catch (err) {
+    console.error("Warning restoring from .eduai-persistent-state.json:", err);
+  }
+}
+
+restoreFromPersistentBackupOnBoot();
 
 async function startServer() {
   const app = express();
@@ -93,24 +252,88 @@ async function startServer() {
         submissions,
         tt27RegularRecords,
         tt27PeriodicRecords,
+        operationHistory,
+        examBuilderDraft,
+        deletedIds,
+        replaceAll,
       } = req.body || {};
 
-      if (Array.isArray(classes)) {
-        liveSystemState.classes = classes;
-      }
-      if (Array.isArray(assignments)) {
-        liveSystemState.assignments = assignments;
-      }
-      if (Array.isArray(submissions)) {
-        liveSystemState.submissions = submissions;
-      }
-      if (tt27RegularRecords && typeof tt27RegularRecords === "object") {
-        liveSystemState.tt27RegularRecords = tt27RegularRecords;
-      }
-      if (tt27PeriodicRecords && typeof tt27PeriodicRecords === "object") {
-        liveSystemState.tt27PeriodicRecords = tt27PeriodicRecords;
+      if (deletedIds && typeof deletedIds === "object") {
+        liveSystemState.deletedIds = {
+          assignments: Array.from(
+            new Set([
+              ...(liveSystemState.deletedIds?.assignments || []),
+              ...(deletedIds.assignments || []),
+            ])
+          ),
+          submissions: Array.from(
+            new Set([
+              ...(liveSystemState.deletedIds?.submissions || []),
+              ...(deletedIds.submissions || []),
+            ])
+          ),
+          classes: Array.from(
+            new Set([
+              ...(liveSystemState.deletedIds?.classes || []),
+              ...(deletedIds.classes || []),
+            ])
+          ),
+        };
       }
 
+      if (Array.isArray(classes)) {
+        liveSystemState.classes = replaceAll
+          ? classes
+          : classes.length > 0
+          ? classes
+          : liveSystemState.classes;
+      }
+      if (Array.isArray(assignments)) {
+        liveSystemState.assignments = replaceAll
+          ? assignments
+          : mergeArrayById(
+              assignments,
+              liveSystemState.assignments,
+              liveSystemState.deletedIds.assignments
+            );
+      }
+      if (Array.isArray(submissions)) {
+        liveSystemState.submissions = replaceAll
+          ? submissions
+          : mergeArrayById(
+              submissions,
+              liveSystemState.submissions,
+              liveSystemState.deletedIds.submissions
+            );
+      }
+      if (tt27RegularRecords && typeof tt27RegularRecords === "object") {
+        liveSystemState.tt27RegularRecords = replaceAll
+          ? tt27RegularRecords
+          : {
+              ...liveSystemState.tt27RegularRecords,
+              ...tt27RegularRecords,
+            };
+      }
+      if (tt27PeriodicRecords && typeof tt27PeriodicRecords === "object") {
+        liveSystemState.tt27PeriodicRecords = replaceAll
+          ? tt27PeriodicRecords
+          : {
+              ...liveSystemState.tt27PeriodicRecords,
+              ...tt27PeriodicRecords,
+            };
+      }
+      if (Array.isArray(operationHistory)) {
+        liveSystemState.operationHistory = mergeArrayById(
+          operationHistory,
+          liveSystemState.operationHistory,
+          []
+        ).slice(0, 200);
+      }
+      if (examBuilderDraft !== undefined) {
+        liveSystemState.examBuilderDraft = examBuilderDraft;
+      }
+
+      liveSystemState.lastUpdatedEpoch = Date.now();
       liveSystemState.lastUpdatedAt = new Date().toLocaleString("vi-VN", {
         hour: "2-digit",
         minute: "2-digit",
@@ -125,6 +348,8 @@ async function startServer() {
       res.json({
         ok: true,
         lastUpdatedAt: liveSystemState.lastUpdatedAt,
+        lastUpdatedEpoch: liveSystemState.lastUpdatedEpoch,
+        state: liveSystemState,
       });
     } catch (error: any) {
       console.error("Error writing to src/data/initialData.ts:", error);

@@ -6387,3 +6387,18 @@ export const INITIAL_SUBMISSIONS: StudentSubmission[] = [];
 export const INITIAL_TT27_REGULAR_RECORDS: Record<string, any[]> = {};
 
 export const INITIAL_TT27_PERIODIC_RECORDS: Record<string, any[]> = {};
+
+export const INITIAL_OPERATION_HISTORY: any[] = [];
+
+export const INITIAL_EXAM_BUILDER_DRAFT: any = null;
+
+export const INITIAL_DELETED_IDS: {
+  assignments: string[];
+  submissions: string[];
+  classes: string[];
+} = {
+  assignments: [],
+  submissions: [],
+  classes: [],
+};
+

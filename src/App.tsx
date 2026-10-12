@@ -19,13 +19,23 @@ import {
   Download,
   FileText,
   HardDrive,
+  History,
+  RefreshCw,
+  Upload,
+  X,
+  Clock,
 } from "lucide-react";
 import {
   INITIAL_ASSIGNMENTS,
   INITIAL_SUBMISSIONS,
+  INITIAL_OPERATION_HISTORY,
+  LAST_CODE_SYNC_AT,
 } from "./data/initialData";
 import {
   fetchSystemStateFromCode,
+  loadCachedLocalState,
+  mergeArrayById,
+  OperationLogEntry,
   syncStateToCodebase,
 } from "./utils/codeSyncEngine";
 import {
@@ -59,11 +69,55 @@ type ActiveTab =
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>("student_portal");
-  const [assignments, setAssignments] = useState<Assignment[]>(INITIAL_ASSIGNMENTS);
-  const [submissions, setSubmissions] = useState<StudentSubmission[]>(INITIAL_SUBMISSIONS);
-  const [classesList, setClassesList] = useState<ClassRoom[]>(INITIAL_CLASSES);
+  const initialCached = useMemo(() => loadCachedLocalState(), []);
 
-  // Tự động đồng bộ trạng thái mới nhất từ mã nguồn (src/data/initialData.ts) khi khởi động
+  const [assignments, setAssignments] = useState<Assignment[]>(() =>
+    mergeArrayById(
+      initialCached?.assignments || [],
+      INITIAL_ASSIGNMENTS,
+      initialCached?.deletedIds?.assignments || []
+    )
+  );
+  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() =>
+    mergeArrayById(
+      initialCached?.submissions || [],
+      INITIAL_SUBMISSIONS,
+      initialCached?.deletedIds?.submissions || []
+    )
+  );
+  const [classesList, setClassesList] = useState<ClassRoom[]>(() =>
+    initialCached?.classes && initialCached.classes.length > 0
+      ? mergeArrayById(
+          initialCached.classes,
+          INITIAL_CLASSES,
+          initialCached?.deletedIds?.classes || []
+        )
+      : INITIAL_CLASSES
+  );
+  const [operationHistory, setOperationHistory] = useState<OperationLogEntry[]>(() =>
+    mergeArrayById(
+      initialCached?.operationHistory || [],
+      INITIAL_OPERATION_HISTORY || [],
+      []
+    )
+  );
+  const [lastSyncTime, setLastSyncTime] = useState<string>(
+    initialCached?.lastUpdatedAt || LAST_CODE_SYNC_AT || new Date().toLocaleString("vi-VN")
+  );
+  const [showHistorySyncModal, setShowHistorySyncModal] = useState<boolean>(false);
+  const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
+  const [syncModalNotice, setSyncModalNotice] = useState<string>("");
+
+  const applySyncResult = (res: {
+    ok: boolean;
+    lastUpdatedAt: string;
+    operationHistory?: OperationLogEntry[];
+  }) => {
+    if (res.lastUpdatedAt) setLastSyncTime(res.lastUpdatedAt);
+    if (res.operationHistory) setOperationHistory(res.operationHistory);
+  };
+
+  // Tự động hợp nhất 2 chiều trạng thái mới nhất từ Server & trình duyệt khi khởi động hoặc chuyển tab
   useEffect(() => {
     fetchSystemStateFromCode().then((remote) => {
       if (!remote) return;
@@ -76,8 +130,14 @@ export default function App() {
       if (Array.isArray(remote.submissions)) {
         setSubmissions(remote.submissions);
       }
+      if (Array.isArray(remote.operationHistory)) {
+        setOperationHistory(remote.operationHistory);
+      }
+      if (remote.lastUpdatedAt) {
+        setLastSyncTime(remote.lastUpdatedAt);
+      }
     });
-  }, []);
+  }, [activeTab]);
 
   // Filters on Teacher Dashboard
   const [classFilter, setClassFilter] = useState<string>("all");
@@ -147,7 +207,11 @@ export default function App() {
       const next = prev.map((s) =>
         selectedSet.has(s.id) ? { ...s, approvalStatus: "approved" as const } : s
       );
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        actionLabel: `Duyệt hàng loạt ${selectedSubIds.length} bài nộp của học sinh`,
+        actionCategory: "grading",
+      }).then(applySyncResult);
       return next;
     });
     setSelectedSubIds([]);
@@ -159,7 +223,12 @@ export default function App() {
     const selectedSet = new Set(selectedSubIds);
     setSubmissions((prev) => {
       const next = prev.filter((s) => !selectedSet.has(s.id));
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        deletedIds: { submissions: selectedSubIds },
+        actionLabel: `Xóa ${selectedSubIds.length} bài nộp đã chọn`,
+        actionCategory: "submission",
+      }).then(applySyncResult);
       return next;
     });
     if (inspectedSubmission && selectedSet.has(inspectedSubmission.id)) {
@@ -171,8 +240,14 @@ export default function App() {
 
   const handleDeleteSingleSubmission = (id: string) => {
     setSubmissions((prev) => {
+      const targetSub = prev.find((s) => s.id === id);
       const next = prev.filter((s) => s.id !== id);
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        deletedIds: { submissions: [id] },
+        actionLabel: `Xóa bài nộp của học sinh ${targetSub?.studentName || id} (${targetSub?.className || ""})`,
+        actionCategory: "submission",
+      }).then(applySyncResult);
       return next;
     });
     setSelectedSubIds((prev) => prev.filter((item) => item !== id));
@@ -187,6 +262,7 @@ export default function App() {
     updates: Partial<Pick<StudentSubmission, "finalScore" | "approvalStatus" | "personalizedFeedback">>
   ) => {
     setSubmissions((prev) => {
+      const targetSub = prev.find((s) => s.id === id);
       const next = prev.map((s) => {
         if (s.id !== id) return s;
         const nextScore = updates.finalScore !== undefined ? updates.finalScore : s.finalScore;
@@ -196,7 +272,11 @@ export default function App() {
           needsAttention: nextScore < 6.5,
         };
       });
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        actionLabel: `Chấm & cập nhật điểm bài làm của ${targetSub?.studentName || id} (${targetSub?.className || ""})`,
+        actionCategory: "grading",
+      }).then(applySyncResult);
       return next;
     });
     if (inspectedSubmission?.id === id) {
@@ -215,10 +295,15 @@ export default function App() {
 
   const handleBatchApproveAllPending = () => {
     setSubmissions((prev) => {
+      const pendingItems = prev.filter((s) => s.approvalStatus === "pending").length;
       const next = prev.map((s) =>
         s.approvalStatus === "pending" ? { ...s, approvalStatus: "approved" as const } : s
       );
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        actionLabel: `Duyệt toàn bộ ${pendingItems} bài nộp đang chờ duyệt`,
+        actionCategory: "grading",
+      }).then(applySyncResult);
       return next;
     });
   };
@@ -229,15 +314,27 @@ export default function App() {
       const next = exists
         ? prev.map((a) => (a.id === newAsg.id ? newAsg : a))
         : [newAsg, ...prev];
-      syncStateToCodebase({ assignments: next });
+      syncStateToCodebase({
+        assignments: next,
+        actionLabel: exists
+          ? `Chỉnh sửa & cập nhật đề "${newAsg.title}" (${newAsg.className})`
+          : `Tạo & giao đề mới "${newAsg.title}" cho ${newAsg.className}`,
+        actionCategory: "exam",
+      }).then(applySyncResult);
       return next;
     });
   };
 
   const handleDeleteAssignment = (assignmentId: string) => {
     setAssignments((prev) => {
+      const targetAsg = prev.find((a) => a.id === assignmentId);
       const next = prev.filter((a) => a.id !== assignmentId);
-      syncStateToCodebase({ assignments: next });
+      syncStateToCodebase({
+        assignments: next,
+        deletedIds: { assignments: [assignmentId] },
+        actionLabel: `Xóa đề kiểm tra "${targetAsg?.title || assignmentId}"`,
+        actionCategory: "exam",
+      }).then(applySyncResult);
       return next;
     });
   };
@@ -248,14 +345,138 @@ export default function App() {
       const next = exists
         ? prev.map((s) => (s.id === newSub.id ? newSub : s))
         : [newSub, ...prev];
-      syncStateToCodebase({ submissions: next });
+      syncStateToCodebase({
+        submissions: next,
+        actionLabel: `Học sinh ${newSub.studentName} (${newSub.className}) nộp bài "${newSub.assignmentTitle}" (${newSub.finalScore.toFixed(1)}đ)`,
+        actionCategory: "submission",
+      }).then(applySyncResult);
       return next;
     });
   };
 
   const handleUpdateClassesAndSync = (updatedClasses: ClassRoom[]) => {
     setClassesList(updatedClasses);
-    syncStateToCodebase({ classes: updatedClasses });
+    const totalStudents = updatedClasses.reduce(
+      (sum, c) => sum + (c.students?.length || 0),
+      0
+    );
+    syncStateToCodebase({
+      classes: updatedClasses,
+      actionLabel: `Cập nhật danh sách Lớp & Học sinh (${updatedClasses.length} lớp · ${totalStudents} học sinh)`,
+      actionCategory: "class",
+    }).then(applySyncResult);
+  };
+
+  const handleManualTwoWaySync = async () => {
+    setIsManualSyncing(true);
+    setSyncModalNotice("");
+    try {
+      const remote = await fetchSystemStateFromCode();
+      if (remote) {
+        if (Array.isArray(remote.classes) && remote.classes.length > 0) {
+          setClassesList(remote.classes);
+        }
+        if (Array.isArray(remote.assignments)) {
+          setAssignments(remote.assignments);
+        }
+        if (Array.isArray(remote.submissions)) {
+          setSubmissions(remote.submissions);
+        }
+        const synced = await syncStateToCodebase({
+          classes: remote.classes || classesList,
+          assignments: remote.assignments || assignments,
+          submissions: remote.submissions || submissions,
+          actionLabel: "Đồng bộ 2 chiều & xác thực toàn bộ dữ liệu lịch sử thao tác",
+          actionCategory: "sync",
+        });
+        applySyncResult(synced);
+        setSyncModalNotice(
+          `Đã đồng bộ 2 chiều thành công lúc ${synced.lastUpdatedAt}! Toàn bộ lịch sử thao tác, đề thi, danh sách lớp và bài nộp đều được bảo toàn.`
+        );
+      }
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
+
+  const handleExportFullBackupJson = () => {
+    const cached = loadCachedLocalState() || {};
+    const payload = {
+      exportedAt: new Date().toLocaleString("vi-VN"),
+      lastUpdatedAt: lastSyncTime,
+      classes: classesList,
+      assignments,
+      submissions,
+      tt27RegularRecords: cached.tt27RegularRecords || {},
+      tt27PeriodicRecords: cached.tt27PeriodicRecords || {},
+      operationHistory,
+      examBuilderDraft: cached.examBuilderDraft || null,
+      deletedIds: cached.deletedIds || { assignments: [], submissions: [], classes: [] },
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8;",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `SaoLuu_EduAI_Primary_${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setSyncModalNotice("Đã xuất tệp sao lưu toàn bộ dữ liệu & lịch sử thao tác (.json) thành công!");
+  };
+
+  const handleImportFullBackupJson = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const imported = JSON.parse(text);
+      if (!imported || typeof imported !== "object") {
+        throw new Error("Tệp JSON không hợp lệ.");
+      }
+      const nextClasses =
+        Array.isArray(imported.classes) && imported.classes.length > 0
+          ? mergeArrayById(imported.classes, classesList, [])
+          : classesList;
+      const nextAssignments = Array.isArray(imported.assignments)
+        ? mergeArrayById(imported.assignments, assignments, [])
+        : assignments;
+      const nextSubmissions = Array.isArray(imported.submissions)
+        ? mergeArrayById(imported.submissions, submissions, [])
+        : submissions;
+      const nextHistory = Array.isArray(imported.operationHistory)
+        ? mergeArrayById(imported.operationHistory, operationHistory, [])
+        : operationHistory;
+
+      setClassesList(nextClasses);
+      setAssignments(nextAssignments);
+      setSubmissions(nextSubmissions);
+      setOperationHistory(nextHistory);
+
+      const res = await syncStateToCodebase({
+        classes: nextClasses,
+        assignments: nextAssignments,
+        submissions: nextSubmissions,
+        tt27RegularRecords: imported.tt27RegularRecords,
+        tt27PeriodicRecords: imported.tt27PeriodicRecords,
+        operationHistory: nextHistory,
+        examBuilderDraft: imported.examBuilderDraft,
+        actionLabel: `Đồng bộ & khôi phục dữ liệu từ tệp sao lưu (${file.name})`,
+        actionCategory: "sync",
+      });
+      applySyncResult(res);
+      setSyncModalNotice(
+        `Đã hợp nhất & đồng bộ dữ liệu từ tệp "${file.name}" thành công (${nextClasses.length} lớp, ${nextAssignments.length} đề, ${nextSubmissions.length} bài nộp)!`
+      );
+    } catch (err: any) {
+      setSyncModalNotice(
+        `Lỗi khi đọc tệp sao lưu: ${err?.message || "Định dạng không hợp lệ"}`
+      );
+    } finally {
+      e.target.value = "";
+    }
   };
 
   const handleSwitchToStudentPortal = () => {
@@ -422,6 +643,18 @@ export default function App() {
         <div className="flex items-center gap-2.5 shrink-0 relative">
           {activeTab !== "student_portal" ? (
             <>
+              <button
+                type="button"
+                onClick={() => {
+                  setSyncModalNotice("");
+                  setShowHistorySyncModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+                title="Xem lịch sử thao tác tự động lưu và đồng bộ 2 chiều"
+              >
+                <History className="w-3.5 h-3.5 text-emerald-700" />
+                <span>Lịch sử &amp; Đồng bộ ({operationHistory.length})</span>
+              </button>
               <button
                 type="button"
                 onClick={handleExportCsv}
@@ -1283,6 +1516,238 @@ export default function App() {
         onUpdateSubmission={handleUpdateSubmission}
         readOnly={activeTab === "student_portal"}
       />
+
+      {/* Trung tâm Tự động Lưu trữ, Lịch sử Thao tác & Đồng bộ 2 chiều */}
+      {showHistorySyncModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4 bg-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 shrink-0">
+                  <History className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Lịch sử Thao tác &amp; Tự động Lưu trữ Đồng bộ 2 Chiều
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Mọi thao tác tạo/chỉnh sửa đề, quản lý lớp, nộp bài và nhận xét Thông tư 27 đều được tự động lưu trữ &amp; giữ nguyên lịch sử khi chỉnh sửa hoặc đồng bộ.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHistorySyncModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-5 flex-1">
+              {/* Thống kê trạng thái lưu trữ hiện tại */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="bg-sky-50/70 border border-sky-200 rounded-xl p-3.5">
+                  <div className="text-[11px] font-semibold text-sky-800 uppercase">
+                    Lớp &amp; Học sinh
+                  </div>
+                  <div className="text-lg font-bold text-slate-900 mt-1">
+                    {classesList.length} lớp ·{" "}
+                    {classesList.reduce((sum, c) => sum + (c.students?.length || 0), 0)} HS
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Đã lưu cố định</div>
+                </div>
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5">
+                  <div className="text-[11px] font-semibold text-emerald-800 uppercase">
+                    Ngân hàng Đề
+                  </div>
+                  <div className="text-lg font-bold text-slate-900 mt-1">
+                    {assignments.length} đề kiểm tra
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Giữ nguyên khi sửa/đồng bộ
+                  </div>
+                </div>
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5">
+                  <div className="text-[11px] font-semibold text-amber-800 uppercase">
+                    Bài nộp Học sinh
+                  </div>
+                  <div className="text-lg font-bold text-slate-900 mt-1">
+                    {submissions.length} bài nộp
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Tự động hợp nhất 2 chiều
+                  </div>
+                </div>
+                <div className="bg-slate-100 border border-slate-200 rounded-xl p-3.5">
+                  <div className="text-[11px] font-semibold text-slate-700 uppercase">
+                    Cập nhật gần nhất
+                  </div>
+                  <div className="text-xs font-bold font-mono text-slate-900 mt-1.5">
+                    {lastSyncTime}
+                  </div>
+                  <div className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                    ● Tự động lưu kích hoạt
+                  </div>
+                </div>
+              </div>
+
+              {/* Thanh công cụ Đồng bộ & Sao lưu */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-0.5">
+                  <div className="text-xs font-bold text-slate-900">
+                    Công cụ Đồng bộ 2 chiều &amp; Sao lưu Lịch sử Thao tác
+                  </div>
+                  <div className="text-xs text-slate-600">
+                    Hợp nhất dữ liệu giữa trình duyệt và máy chủ mà không làm mất bất kỳ đề thi, bài nộp hay chỉnh sửa nào trước đó.
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isManualSyncing}
+                    onClick={handleManualTwoWaySync}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-60 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isManualSyncing ? "animate-spin" : ""}`} />
+                    {isManualSyncing ? "Đang đồng bộ..." : "Đồng bộ 2 chiều ngay"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportFullBackupJson}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5 text-[#0284C7]" />
+                    Xuất tệp Đồng bộ (.json)
+                  </button>
+                  <label className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer">
+                    <Upload className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Nhập / Đồng bộ tệp (.json)</span>
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportFullBackupJson}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {syncModalNotice && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 px-4 py-3 rounded-xl text-xs font-medium flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{syncModalNotice}</span>
+                </div>
+              )}
+
+              {/* Danh sách Nhật ký lịch sử thao tác */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Nhật ký Lịch sử Thao tác đã lưu ({operationHistory.length} thao tác)
+                  </h4>
+                  <span className="text-[11px] text-slate-500">
+                    Tự động ghi nhận theo thời gian thực
+                  </span>
+                </div>
+
+                {operationHistory.length === 0 ? (
+                  <div className="border border-dashed border-slate-300 rounded-xl p-8 text-center space-y-2">
+                    <Clock className="w-6 h-6 text-slate-400 mx-auto" />
+                    <div className="text-xs font-semibold text-slate-700">
+                      Chưa có thao tác mới nào được ghi nhận trong phiên này
+                    </div>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      Khi Thầy tạo đề, chỉnh sửa ma trận, cập nhật danh sách lớp, duyệt điểm hoặc khi học sinh nộp bài, toàn bộ lịch sử thao tác sẽ tự động hiển thị tại đây.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-xl divide-y divide-slate-200 max-h-80 overflow-y-auto bg-white">
+                    {operationHistory.map((item) => {
+                      const badgeMap: Record<
+                        OperationLogEntry["category"],
+                        { label: string; cls: string }
+                      > = {
+                        exam: {
+                          label: "Đề kiểm tra",
+                          cls: "bg-sky-50 text-sky-800 border-sky-200",
+                        },
+                        class: {
+                          label: "Lớp & Học sinh",
+                          cls: "bg-indigo-50 text-indigo-800 border-indigo-200",
+                        },
+                        submission: {
+                          label: "Bài nộp HS",
+                          cls: "bg-amber-50 text-amber-800 border-amber-200",
+                        },
+                        grading: {
+                          label: "Chấm & Duyệt",
+                          cls: "bg-emerald-50 text-emerald-800 border-emerald-200",
+                        },
+                        tt27: {
+                          label: "Thông tư 27",
+                          cls: "bg-purple-50 text-purple-800 border-purple-200",
+                        },
+                        draft: {
+                          label: "Lưu nháp",
+                          cls: "bg-slate-100 text-slate-700 border-slate-200",
+                        },
+                        sync: {
+                          label: "Đồng bộ",
+                          cls: "bg-teal-50 text-teal-800 border-teal-200",
+                        },
+                      };
+                      const badge = badgeMap[item.category] || badgeMap.sync;
+                      return (
+                        <div
+                          key={item.id}
+                          className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/80"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded border ${badge.cls}`}
+                              >
+                                {badge.label}
+                              </span>
+                              <span className="text-xs font-semibold text-slate-900">
+                                {item.actionLabel}
+                              </span>
+                            </div>
+                            {item.stats && (
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                Trạng thái lưu: {item.stats.classesCount ?? classesList.length} lớp ·{" "}
+                                {item.stats.assignmentsCount ?? assignments.length} đề ·{" "}
+                                {item.stats.submissionsCount ?? submissions.length} bài nộp
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-500 shrink-0">
+                            {item.timestamp}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 border-t border-slate-200 bg-slate-50 flex items-center justify-between">
+              <span className="text-xs text-slate-600">
+                Dữ liệu được lưu song song trên Trình duyệt, tệp trạng thái Server và mã nguồn hệ thống.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowHistorySyncModal(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer"
+              >
+                Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* System Footer */}
       <footer className="bg-white border-t border-slate-200 py-5 px-6 mt-12">

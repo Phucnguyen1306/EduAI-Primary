@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Sparkles,
   Download,
@@ -46,6 +46,11 @@ import {
   formatTargetClassesLabel,
   generateIllustrationDataUrl,
 } from "../utils/examIllustrationEngine";
+import {
+  loadExamBuilderDraft,
+  saveExamBuilderDraft,
+  syncStateToCodebase,
+} from "../utils/codeSyncEngine";
 import { ClassRoom } from "./ClassManagerView";
 
 function getGradeCurriculumBoundaryPrompt(grade: GradeLevel): string {
@@ -1060,12 +1065,16 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   onAddAssignment,
   onDeleteAssignment,
 }) => {
-  const initialGrade: GradeLevel = "Lớp 4";
-  const initialTopic = KNTT_CURRICULUM[initialGrade][4];
+  const savedDraft = loadExamBuilderDraft();
+  const initialGrade: GradeLevel = savedDraft?.grade || "Lớp 4";
+  const initialTopic =
+    (KNTT_CURRICULUM[initialGrade] || KNTT_CURRICULUM["Lớp 4"]).find(
+      (t) => t.id === savedDraft?.selectedTopicId
+    ) || (KNTT_CURRICULUM[initialGrade] || KNTT_CURRICULUM["Lớp 4"])[4] || KNTT_CURRICULUM["Lớp 4"][0];
   const initialNotes = getDefaultStep4NotesForGradeAndTopic(
     initialGrade,
     initialTopic,
-    "5-common"
+    savedDraft?.selectedSubtrackId || "5-common"
   );
 
   // Bước 1: Chọn Khối lớp & Chọn nhiều lớp giao bài trong cùng khối lớp
@@ -1074,73 +1083,190 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     .filter((c) => c.grade === initialGrade)
     .map((c) => c.name);
   const [selectedClassNames, setSelectedClassNames] = useState<string[]>(
-    initialGradeClassNames.length > 0 ? [initialGradeClassNames[0]] : ["Lớp 4/1"]
+    Array.isArray(savedDraft?.selectedClassNames) && savedDraft.selectedClassNames.length > 0
+      ? savedDraft.selectedClassNames
+      : initialGradeClassNames.length > 0
+      ? [initialGradeClassNames[0]]
+      : ["Lớp 4/1"]
   );
   const [className, setClassName] = useState<string>(
-    initialGradeClassNames[0] || "Lớp 4/1"
+    savedDraft?.className || initialGradeClassNames[0] || "Lớp 4/1"
   );
 
   // Bước 3: Chọn 1 hoặc nhiều Chủ đề SGK Tin học KNTT đúng theo Khối lớp Bước 1
-  const [selectedTopicId, setSelectedTopicId] = useState<string>(initialTopic.id);
-  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>([initialTopic.id]);
-  const [selectedSubtrackId, setSelectedSubtrackId] = useState<string>("5-common");
+  const [selectedTopicId, setSelectedTopicId] = useState<string>(
+    savedDraft?.selectedTopicId || initialTopic.id
+  );
+  const [selectedTopicIds, setSelectedTopicIds] = useState<string[]>(
+    Array.isArray(savedDraft?.selectedTopicIds) && savedDraft.selectedTopicIds.length > 0
+      ? savedDraft.selectedTopicIds
+      : [initialTopic.id]
+  );
+  const [selectedSubtrackId, setSelectedSubtrackId] = useState<string>(
+    savedDraft?.selectedSubtrackId || "5-common"
+  );
 
   // Bước 2: Chọn Loại đề (Thực hành / Lý thuyết / Bài kiểm tra hàng tháng / Đề thi Học kỳ)
   const [builderMode, setBuilderMode] = useState<
     "practice" | "theory" | "monthly" | "semester"
-  >("semester");
+  >(savedDraft?.builderMode || "semester");
   const [monthlyExamMonth, setMonthlyExamMonth] = useState<string>(
-    "Tháng 10 (Chủ đề 1 & 2)"
+    savedDraft?.monthlyExamMonth || "Tháng 10 (Chủ đề 1 & 2)"
   );
   const [monthlyExamFormat, setMonthlyExamFormat] = useState<
     "combined" | "theory_only" | "practice_only"
-  >("combined");
-  const [fileType, setFileType] = useState<PracticeFileType>("theory");
-  const [theoryQuestionCount, setTheoryQuestionCount] = useState<number>(6);
-  const [theoryEssayCount, setTheoryEssayCount] = useState<number>(1);
-  const [practiceTaskCount, setPracticeTaskCount] = useState<number>(4);
+  >(savedDraft?.monthlyExamFormat || "combined");
+  const [fileType, setFileType] = useState<PracticeFileType>(
+    savedDraft?.fileType || "theory"
+  );
+  const [theoryQuestionCount, setTheoryQuestionCount] = useState<number>(
+    savedDraft?.theoryQuestionCount ?? 6
+  );
+  const [theoryEssayCount, setTheoryEssayCount] = useState<number>(
+    savedDraft?.theoryEssayCount ?? 1
+  );
+  const [practiceTaskCount, setPracticeTaskCount] = useState<number>(
+    savedDraft?.practiceTaskCount ?? 4
+  );
 
   // Cấu hình riêng cho Chuyên gia Khảo thí — Tạo Đề Thi Học Kỳ
   const [semesterType, setSemesterType] = useState<
     "Học kỳ I" | "Học kỳ II" | "Giữa Học kỳ I" | "Giữa Học kỳ II"
-  >("Học kỳ I");
-  const [semesterSchoolYear, setSemesterSchoolYear] = useState<string>("2026 - 2027");
-  const [semesterDuration, setSemesterDuration] = useState<number>(35);
-  const [semesterTheoryPercent, setSemesterTheoryPercent] = useState<number>(50);
-  const [semesterPracticePercent, setSemesterPracticePercent] = useState<number>(50);
-  const [semesterNhanBietPercent, setSemesterNhanBietPercent] = useState<number>(40);
-  const [semesterThongHieuPercent, setSemesterThongHieuPercent] = useState<number>(30);
-  const [semesterVanDungPercent, setSemesterVanDungPercent] = useState<number>(30);
-  const [semesterPracticeCount, setSemesterPracticeCount] = useState<number>(1);
+  >(savedDraft?.semesterType || "Học kỳ I");
+  const [semesterSchoolYear, setSemesterSchoolYear] = useState<string>(
+    savedDraft?.semesterSchoolYear || "2026 - 2027"
+  );
+  const [semesterDuration, setSemesterDuration] = useState<number>(
+    savedDraft?.semesterDuration ?? 35
+  );
+  const [semesterTheoryPercent, setSemesterTheoryPercent] = useState<number>(
+    savedDraft?.semesterTheoryPercent ?? 50
+  );
+  const [semesterPracticePercent, setSemesterPracticePercent] = useState<number>(
+    savedDraft?.semesterPracticePercent ?? 50
+  );
+  const [semesterNhanBietPercent, setSemesterNhanBietPercent] = useState<number>(
+    savedDraft?.semesterNhanBietPercent ?? 40
+  );
+  const [semesterThongHieuPercent, setSemesterThongHieuPercent] = useState<number>(
+    savedDraft?.semesterThongHieuPercent ?? 30
+  );
+  const [semesterVanDungPercent, setSemesterVanDungPercent] = useState<number>(
+    savedDraft?.semesterVanDungPercent ?? 30
+  );
+  const [semesterPracticeCount, setSemesterPracticeCount] = useState<number>(
+    savedDraft?.semesterPracticeCount ?? 1
+  );
 
   const [topicInput, setTopicInput] = useState<string>(
-    `Đề thi định kỳ Học kỳ I môn Tin học ${initialGrade} — ${initialTopic.title}: ${initialTopic.theoryPrompt}`
+    savedDraft?.topicInput ||
+      `Đề thi định kỳ Học kỳ I môn Tin học ${initialGrade} — ${initialTopic.title}: ${initialTopic.theoryPrompt}`
   );
 
   // [GHI CHÚ TRỌNG TÂM] trong Bước 4 — tự động đồng bộ chuẩn theo Khối lớp (Bước 1) & Chủ đề (Bước 3)
   const [focusKnowledgeNote, setFocusKnowledgeNote] = useState<string>(
-    initialNotes.focusNote
+    savedDraft?.focusKnowledgeNote || initialNotes.focusNote
   );
   const [teacherCustomIdeaNote, setTeacherCustomIdeaNote] = useState<string>(
-    initialNotes.customIdeaNote
+    savedDraft?.teacherCustomIdeaNote || initialNotes.customIdeaNote
   );
   const [strictConstraintNote, setStrictConstraintNote] = useState<string>(
-    "Bám sát 100% tài liệu SGK Tin học đã đính kèm, không sáng tạo thêm các phần kiến thức ngoài."
+    savedDraft?.strictConstraintNote ||
+      "Bám sát 100% tài liệu SGK Tin học đã đính kèm, không sáng tạo thêm các phần kiến thức ngoài."
   );
 
   // Nguồn "Từ Tài liệu khác" (Ma trận dạng văn bản, File Sách PDF, Đề thi mẫu)
   const [referenceDocType, setReferenceDocType] = useState<string>(
-    "Ma trận / Đặc tả đề kiểm tra (Văn bản)"
+    savedDraft?.referenceDocType || "Ma trận / Đặc tả đề kiểm tra (Văn bản)"
   );
-  const [uploadedDataFileName, setUploadedDataFileName] = useState<string | null>(null);
-  const [referenceDocText, setReferenceDocText] = useState<string>("");
+  const [uploadedDataFileName, setUploadedDataFileName] = useState<string | null>(
+    savedDraft?.uploadedDataFileName || null
+  );
+  const [referenceDocText, setReferenceDocText] = useState<string>(
+    savedDraft?.referenceDocText || ""
+  );
   const [referencePdfBase64, setReferencePdfBase64] = useState<string>("");
 
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [generatedAssignment, setGeneratedAssignment] = useState<Assignment | null>(null);
+  const [generatedAssignment, setGeneratedAssignment] = useState<Assignment | null>(
+    savedDraft?.generatedAssignment || null
+  );
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [confirmingDeleteAsgId, setConfirmingDeleteAsgId] = useState<string | null>(null);
+
+  // Tự động lưu nháp cấu hình & đề đang soạn/chỉnh sửa mỗi khi giáo viên thao tác
+  useEffect(() => {
+    const draftPayload = {
+      grade,
+      selectedClassNames,
+      className,
+      selectedTopicId,
+      selectedTopicIds,
+      selectedSubtrackId,
+      builderMode,
+      monthlyExamMonth,
+      monthlyExamFormat,
+      fileType,
+      theoryQuestionCount,
+      theoryEssayCount,
+      practiceTaskCount,
+      semesterType,
+      semesterSchoolYear,
+      semesterDuration,
+      semesterTheoryPercent,
+      semesterPracticePercent,
+      semesterNhanBietPercent,
+      semesterThongHieuPercent,
+      semesterVanDungPercent,
+      semesterPracticeCount,
+      topicInput,
+      focusKnowledgeNote,
+      teacherCustomIdeaNote,
+      strictConstraintNote,
+      referenceDocType,
+      uploadedDataFileName,
+      referenceDocText,
+      generatedAssignment,
+      savedAt: new Date().toLocaleString("vi-VN"),
+    };
+    saveExamBuilderDraft(draftPayload);
+    const timer = setTimeout(() => {
+      syncStateToCodebase({ examBuilderDraft: draftPayload });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [
+    grade,
+    selectedClassNames,
+    className,
+    selectedTopicId,
+    selectedTopicIds,
+    selectedSubtrackId,
+    builderMode,
+    monthlyExamMonth,
+    monthlyExamFormat,
+    fileType,
+    theoryQuestionCount,
+    theoryEssayCount,
+    practiceTaskCount,
+    semesterType,
+    semesterSchoolYear,
+    semesterDuration,
+    semesterTheoryPercent,
+    semesterPracticePercent,
+    semesterNhanBietPercent,
+    semesterThongHieuPercent,
+    semesterVanDungPercent,
+    semesterPracticeCount,
+    topicInput,
+    focusKnowledgeNote,
+    teacherCustomIdeaNote,
+    strictConstraintNote,
+    referenceDocType,
+    uploadedDataFileName,
+    referenceDocText,
+    generatedAssignment,
+  ]);
 
   const currentGradeTopics = KNTT_CURRICULUM[grade] || KNTT_CURRICULUM["Lớp 4"];
   const selectedTopicObjs: KnttTopicConfig[] = (() => {
@@ -1177,19 +1303,35 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         : [...prev, clsName];
       const nextLabel = formatTargetClassesLabel(next, grade);
       setClassName(nextLabel);
+      setGeneratedAssignment((curr) =>
+        curr && curr.grade === grade
+          ? { ...curr, className: nextLabel, targetClassNames: next }
+          : curr
+      );
       return next;
     });
   };
   const selectAllClassesInGrade = () => {
     const allNames = matchingClassesForGrade.map((c) => c.name);
     if (allNames.length === 0) return;
+    const nextLabel = formatTargetClassesLabel(allNames, grade);
     setSelectedClassNames(allNames);
-    setClassName(formatTargetClassesLabel(allNames, grade));
+    setClassName(nextLabel);
+    setGeneratedAssignment((curr) =>
+      curr && curr.grade === grade
+        ? { ...curr, className: nextLabel, targetClassNames: allNames }
+        : curr
+    );
   };
   const selectSingleFirstClassInGrade = () => {
     const first = matchingClassesForGrade[0]?.name || className;
     setSelectedClassNames([first]);
     setClassName(first);
+    setGeneratedAssignment((curr) =>
+      curr && curr.grade === grade
+        ? { ...curr, className: first, targetClassNames: [first] }
+        : curr
+    );
   };
   const hasStep4Material = Boolean(
     uploadedDataFileName || referenceDocText.trim() || referencePdfBase64
@@ -2784,10 +2926,10 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   const handleAssignToClass = () => {
     if (!generatedAssignment) return;
     const finalTargets =
-      generatedAssignment.targetClassNames && generatedAssignment.targetClassNames.length > 0
-        ? generatedAssignment.targetClassNames
-        : selectedClassNames.length > 0
+      selectedClassNames.length > 0 && generatedAssignment.grade === grade
         ? selectedClassNames
+        : generatedAssignment.targetClassNames && generatedAssignment.targetClassNames.length > 0
+        ? generatedAssignment.targetClassNames
         : [generatedAssignment.className];
     const finalClassLabel = formatTargetClassesLabel(
       finalTargets,
@@ -4963,8 +5105,17 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                 ),
                               }
                             : asg;
+                          setGrade(asg.grade);
+                          const restoredClasses =
+                            asg.targetClassNames && asg.targetClassNames.length > 0
+                              ? asg.targetClassNames
+                              : [asg.className];
+                          setSelectedClassNames(restoredClasses);
+                          setClassName(asg.className);
                           setGeneratedAssignment(enrichedAsg);
-                          setSavedNotice(null);
+                          setSavedNotice(
+                            `Đang mở chế độ chỉnh sửa đề "${asg.title}". Mọi thay đổi được lưu nháp tự động — bấm "Lưu Cập nhật Đề & Ma trận" để cập nhật chính thức.`
+                          );
                         }}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#0284C7] bg-sky-50 hover:bg-sky-100 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
                       >
