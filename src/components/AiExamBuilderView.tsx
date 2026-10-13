@@ -24,6 +24,7 @@ import {
   RefreshCw,
   CheckSquare,
   Square,
+  Shuffle,
 } from "lucide-react";
 import {
   Assignment,
@@ -46,6 +47,7 @@ import {
   formatTargetClassesLabel,
   generateIllustrationDataUrl,
 } from "../utils/examIllustrationEngine";
+import { ensureExamReserveQuestions } from "../utils/reserveQuestionEngine";
 import {
   loadExamBuilderDraft,
   saveExamBuilderDraft,
@@ -1855,7 +1857,11 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             },
           };
 
-          const enrichedSemExam = enrichExamWithAutoIllustrations(semExam, grade);
+          const enrichedSemExam = ensureExamReserveQuestions(
+            enrichExamWithAutoIllustrations(semExam, grade),
+            grade,
+            selectedTopicIds
+          );
           const targetClsList =
             selectedClassNames.length > 0 ? selectedClassNames : [className];
           const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
@@ -1972,7 +1978,11 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             shortAnswers: normalizedEssays,
           };
 
-          const enrichedExam = enrichExamWithAutoIllustrations(exam, grade);
+          const enrichedExam = ensureExamReserveQuestions(
+            enrichExamWithAutoIllustrations(exam, grade),
+            grade,
+            selectedTopicIds
+          );
           const targetClsList =
             selectedClassNames.length > 0 ? selectedClassNames : [className];
           const formattedClsLabel = formatTargetClassesLabel(targetClsList, grade);
@@ -2096,9 +2106,13 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               referenceFileName: uploadedDataFileName,
               subtrackId: selectedSubtrackId,
             });
-            const enrichedFallbackSem = enrichExamWithAutoIllustrations(
-              fallbackSemExam,
-              grade
+            const enrichedFallbackSem = ensureExamReserveQuestions(
+              enrichExamWithAutoIllustrations(
+                fallbackSemExam,
+                grade
+              ),
+              grade,
+              selectedTopicIds
             );
             const targetClsList =
               selectedClassNames.length > 0 ? selectedClassNames : [className];
@@ -2125,22 +2139,26 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               builderMode === "monthly"
                 ? `Bài Kiểm tra Hàng tháng (${monthlyExamMonth}) — ${fallbackTitle}`
                 : fallbackTitle;
-            const fallbackExam = enrichExamWithAutoIllustrations(
-              buildFallbackExam(
-                grade,
-                monthlyOrTheoryTitle,
-                combinedTopicPrompt,
-                theoryQuestionCount,
-                theoryEssayCount,
-                activeTopicObj,
-                focusKnowledgeNote,
-                teacherCustomIdeaNote,
-                referenceDocText,
-                uploadedDataFileName,
-                selectedSubtrackId,
-                selectedTopicObjs
+            const fallbackExam = ensureExamReserveQuestions(
+              enrichExamWithAutoIllustrations(
+                buildFallbackExam(
+                  grade,
+                  monthlyOrTheoryTitle,
+                  combinedTopicPrompt,
+                  theoryQuestionCount,
+                  theoryEssayCount,
+                  activeTopicObj,
+                  focusKnowledgeNote,
+                  teacherCustomIdeaNote,
+                  referenceDocText,
+                  uploadedDataFileName,
+                  selectedSubtrackId,
+                  selectedTopicObjs
+                ),
+                grade
               ),
-              grade
+              grade,
+              selectedTopicIds
             );
             const targetClsList =
               selectedClassNames.length > 0 ? selectedClassNames : [className];
@@ -2263,10 +2281,16 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       points: ptPerMcq,
     }));
 
-    syncTheoryExamAndChecklist({
-      ...exam,
-      multipleChoice: updatedMcqs,
-    });
+    const nextExam = ensureExamReserveQuestions(
+      {
+        ...exam,
+        multipleChoice: updatedMcqs,
+      },
+      generatedAssignment.grade,
+      selectedTopicIds
+    );
+
+    syncTheoryExamAndChecklist(nextExam);
   };
 
   const handleRemoveTheoryQuestion = (indexToRemove: number) => {
@@ -2407,6 +2431,67 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     });
   };
 
+  const handleSwapMcqWithReserve = (qIdx: number) => {
+    if (!generatedAssignment || !generatedAssignment.theoryExam) return;
+    let exam = generatedAssignment.theoryExam;
+    const targetQ = exam.multipleChoice[qIdx];
+    if (!targetQ) return;
+
+    if (!targetQ.reserveQuestions || targetQ.reserveQuestions.length === 0) {
+      exam = ensureExamReserveQuestions(exam, generatedAssignment.grade, selectedTopicIds);
+    }
+
+    const currentQ = exam.multipleChoice[qIdx];
+    const reserves =
+      currentQ.reserveQuestions && currentQ.reserveQuestions.length > 0
+        ? [...currentQ.reserveQuestions]
+        : [];
+    if (reserves.length === 0) return;
+
+    const currentIndex = (currentQ.reserveIndex ?? 0) % reserves.length;
+    const pickedReserve = reserves[currentIndex];
+
+    const oldAsReserve = {
+      question: currentQ.question,
+      options: [...currentQ.options],
+      correctIndex: currentQ.correctIndex,
+      explanation: currentQ.explanation,
+      cognitiveLevel: currentQ.cognitiveLevel,
+      illustrationNote: currentQ.illustrationNote,
+      illustrationImageDataUrl: currentQ.illustrationImageDataUrl,
+      illustrationVariant: currentQ.illustrationVariant,
+      hasNoIllustration: currentQ.hasNoIllustration,
+    };
+
+    reserves[currentIndex] = oldAsReserve;
+    const nextReserveIndex = (currentIndex + 1) % reserves.length;
+
+    const updatedMcqs = exam.multipleChoice.map((q, idx) => {
+      if (idx !== qIdx) return q;
+      return {
+        ...q,
+        question: pickedReserve.question,
+        options: [...pickedReserve.options],
+        correctIndex: pickedReserve.correctIndex,
+        explanation: pickedReserve.explanation,
+        cognitiveLevel: pickedReserve.cognitiveLevel || q.cognitiveLevel,
+        illustrationNote: pickedReserve.illustrationNote || pickedReserve.question,
+        illustrationImageDataUrl: pickedReserve.illustrationImageDataUrl || "",
+        illustrationVariant: pickedReserve.illustrationVariant ?? idx,
+        hasNoIllustration: pickedReserve.hasNoIllustration ?? false,
+        reserveQuestions: reserves,
+        reserveIndex: nextReserveIndex,
+      };
+    });
+
+    const nextExam = {
+      ...exam,
+      multipleChoice: updatedMcqs,
+    };
+    syncTheoryExamAndChecklist(nextExam);
+    setSavedNotice(`Đã đổi sang câu hỏi trắc nghiệm dự trù (${currentIndex + 1}/5) cho Câu ${qIdx + 1}!`);
+  };
+
   const handleAddMoreEssayQuestion = () => {
     if (!generatedAssignment || !generatedAssignment.theoryExam) return;
     const exam = generatedAssignment.theoryExam;
@@ -2432,11 +2517,80 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       points: 2.0,
     };
     const nextEssays = [...currentEssays, newEssay];
-    syncTheoryExamAndChecklist({
-      ...exam,
-      shortAnswers: nextEssays,
-      shortAnswer: nextEssays[0],
+    const nextExam = ensureExamReserveQuestions(
+      {
+        ...exam,
+        shortAnswers: nextEssays,
+        shortAnswer: nextEssays[0],
+      },
+      generatedAssignment.grade,
+      selectedTopicIds
+    );
+    syncTheoryExamAndChecklist(nextExam);
+  };
+
+  const handleSwapEssayWithReserve = (sIdx: number) => {
+    if (!generatedAssignment || !generatedAssignment.theoryExam) return;
+    let exam = generatedAssignment.theoryExam;
+    const activeEssays = getActiveShortAnswers(exam);
+    const targetEssay = activeEssays[sIdx];
+    if (!targetEssay) return;
+
+    if (!targetEssay.reserveQuestions || targetEssay.reserveQuestions.length === 0) {
+      exam = ensureExamReserveQuestions(exam, generatedAssignment.grade, selectedTopicIds);
+    }
+
+    const currentEssays = getActiveShortAnswers(exam);
+    const currentEssay = currentEssays[sIdx];
+    const reserves =
+      currentEssay.reserveQuestions && currentEssay.reserveQuestions.length > 0
+        ? [...currentEssay.reserveQuestions]
+        : [];
+    if (reserves.length === 0) return;
+
+    const currentIndex = (currentEssay.reserveIndex ?? 0) % reserves.length;
+    const pickedReserve = reserves[currentIndex];
+
+    const oldAsReserve = {
+      question: currentEssay.question,
+      sampleAnswer: currentEssay.sampleAnswer,
+      gradingGuide: currentEssay.gradingGuide,
+      semanticKeywords: [...currentEssay.semanticKeywords],
+      cognitiveLevel: currentEssay.cognitiveLevel,
+      illustrationNote: currentEssay.illustrationNote,
+      illustrationImageDataUrl: currentEssay.illustrationImageDataUrl,
+      illustrationVariant: currentEssay.illustrationVariant,
+      hasNoIllustration: currentEssay.hasNoIllustration,
+    };
+
+    reserves[currentIndex] = oldAsReserve;
+    const nextReserveIndex = (currentIndex + 1) % reserves.length;
+
+    const updatedEssays = currentEssays.map((sa, idx) => {
+      if (idx !== sIdx) return sa;
+      return {
+        ...sa,
+        question: pickedReserve.question,
+        sampleAnswer: pickedReserve.sampleAnswer,
+        gradingGuide: pickedReserve.gradingGuide || sa.gradingGuide,
+        semanticKeywords: [...pickedReserve.semanticKeywords],
+        cognitiveLevel: pickedReserve.cognitiveLevel || sa.cognitiveLevel,
+        illustrationNote: pickedReserve.illustrationNote || pickedReserve.question,
+        illustrationImageDataUrl: pickedReserve.illustrationImageDataUrl || "",
+        illustrationVariant: pickedReserve.illustrationVariant ?? idx,
+        hasNoIllustration: pickedReserve.hasNoIllustration ?? false,
+        reserveQuestions: reserves,
+        reserveIndex: nextReserveIndex,
+      };
     });
+
+    const nextExam = {
+      ...exam,
+      shortAnswers: updatedEssays,
+      shortAnswer: updatedEssays[0] || exam.shortAnswer,
+    };
+    syncTheoryExamAndChecklist(nextExam);
+    setSavedNotice(`Đã đổi sang câu hỏi tự luận dự trù (${currentIndex + 1}/5) cho Câu tự luận ${sIdx + 1}!`);
   };
 
   const handleRemoveEssayQuestion = (idxToRemove: number) => {
@@ -4444,21 +4598,35 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="flex-1 min-w-[220px]">
-                            <div className="flex items-center gap-2 mb-1">
-                              <label className="text-[11px] font-bold text-slate-800">
-                                Câu {idx + 1}:
-                              </label>
-                              <select
-                                value={q.cognitiveLevel || "Nhận biết"}
-                                onChange={(e) =>
-                                  handleUpdateMcqField(idx, "cognitiveLevel", e.target.value)
-                                }
-                                className="px-2 py-0.5 text-[11px] font-semibold bg-white border border-slate-300 rounded text-[#0284C7]"
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                              <div className="flex items-center gap-2">
+                                <label className="text-[11px] font-bold text-slate-800">
+                                  Câu {idx + 1}:
+                                </label>
+                                <select
+                                  value={q.cognitiveLevel || "Nhận biết"}
+                                  onChange={(e) =>
+                                    handleUpdateMcqField(idx, "cognitiveLevel", e.target.value)
+                                  }
+                                  className="px-2 py-0.5 text-[11px] font-semibold bg-white border border-slate-300 rounded text-[#0284C7]"
+                                >
+                                  <option value="Nhận biết">Mức 1: Nhận biết</option>
+                                  <option value="Thông hiểu">Mức 2: Thông hiểu</option>
+                                  <option value="Vận dụng">Mức 3: Vận dụng</option>
+                                </select>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSwapMcqWithReserve(idx)}
+                                title="Đổi sang câu hỏi khác trong bộ 5 câu dự trù sẵn (không trùng lặp với các câu khác trong đề)"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer shadow-xs"
                               >
-                                <option value="Nhận biết">Mức 1: Nhận biết</option>
-                                <option value="Thông hiểu">Mức 2: Thông hiểu</option>
-                                <option value="Vận dụng">Mức 3: Vận dụng</option>
-                              </select>
+                                <Shuffle className="w-3.5 h-3.5 text-amber-600" />
+                                <span>
+                                  Đổi câu hỏi khác (Dự trù {((q.reserveIndex ?? 0) % (q.reserveQuestions?.length || 5)) + 1}/5)
+                                </span>
+                              </button>
                             </div>
                             <input
                               type="text"
@@ -4737,9 +4905,22 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1">
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                              Câu hỏi Tự luận {sIdx + 1} ({sa.cognitiveLevel || "Thông hiểu"}):
-                            </label>
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
+                              <label className="text-[11px] font-bold text-slate-700">
+                                Câu hỏi Tự luận {sIdx + 1} ({sa.cognitiveLevel || "Thông hiểu"}):
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => handleSwapEssayWithReserve(sIdx)}
+                                title="Đổi sang câu tự luận khác trong bộ 5 câu dự trù sẵn (không trùng lặp với các câu khác trong đề)"
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors cursor-pointer shadow-xs"
+                              >
+                                <Shuffle className="w-3.5 h-3.5 text-amber-600" />
+                                <span>
+                                  Đổi câu hỏi khác (Dự trù {((sa.reserveIndex ?? 0) % (sa.reserveQuestions?.length || 5)) + 1}/5)
+                                </span>
+                              </button>
+                            </div>
                             <input
                               type="text"
                               value={sa.question}
@@ -5486,8 +5667,11 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           const enrichedAsg = asg.theoryExam
                             ? {
                                 ...asg,
-                                theoryExam: enrichExamWithAutoIllustrations(
-                                  asg.theoryExam,
+                                theoryExam: ensureExamReserveQuestions(
+                                  enrichExamWithAutoIllustrations(
+                                    asg.theoryExam,
+                                    asg.grade
+                                  ),
                                   asg.grade
                                 ),
                               }

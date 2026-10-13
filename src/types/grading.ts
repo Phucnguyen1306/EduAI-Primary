@@ -24,6 +24,18 @@ export interface MultipleChoiceQuestion {
   illustrationImageDataUrl?: string;
   illustrationVariant?: number;
   hasNoIllustration?: boolean;
+  reserveQuestions?: Array<{
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+    cognitiveLevel?: CognitiveLevel;
+    illustrationNote?: string;
+    illustrationImageDataUrl?: string;
+    illustrationVariant?: number;
+    hasNoIllustration?: boolean;
+  }>;
+  reserveIndex?: number;
 }
 
 export interface ShortAnswerQuestion {
@@ -38,6 +50,18 @@ export interface ShortAnswerQuestion {
   illustrationVariant?: number;
   gradingGuide?: string;
   hasNoIllustration?: boolean;
+  reserveQuestions?: Array<{
+    question: string;
+    sampleAnswer: string;
+    semanticKeywords: string[];
+    cognitiveLevel?: CognitiveLevel;
+    illustrationNote?: string;
+    illustrationImageDataUrl?: string;
+    illustrationVariant?: number;
+    gradingGuide?: string;
+    hasNoIllustration?: boolean;
+  }>;
+  reserveIndex?: number;
 }
 
 export interface SemesterPracticeTask {

@@ -491,6 +491,7 @@ ${referenceDocText ? `"""\n${referenceDocText.slice(0, 12000)}\n"""` : "(Xem to�
 }
 Yêu cầu:
 - Bao gồm ĐÚNG ${targetMcqCount} câu hỏi trắc nghiệm (mỗi câu có 4 lựa chọn A, B, C, D) và ĐÚNG ${targetEssayCount} câu hỏi tự luận ngắn (để chấm bằng NLP đọc hiểu ý nghĩa, trả về trong mảng shortAnswers). Tổng điểm toàn bài = 10 điểm.
+- TUYỆT ĐỐI KHÔNG ĐƯỢC TRÙNG LẶP CÂU HỎI: Mọi câu hỏi trong cùng bài kiểm tra phải hoàn toàn độc lập, khác biệt về nội dung kiến thức, tình huống và góc độ hỏi. Tuyệt đối không lặp lại câu hỏi dưới bất kỳ hình thức nào.
 - Mọi câu hỏi trắc nghiệm và tự luận phải CHỈ thuộc đúng Khối ${grade || "Lớp 4"} (Bước 1) và đúng chủ đề đã chọn ở Bước 3 ("${selectedTopicTitle}") cùng tài liệu Bước 4, tuyệt đối không lấy kiến thức của khối lớp khác hoặc bịa thêm kiến thức ngoài.
 - Phần nội dung câu hỏi (trường "question") CHỈ nêu trực tiếp nội dung câu hỏi, tuyệt đối KHÔNG ghi các nhãn tiền tố như "[Tin học 4 - Chủ đề 1]", "Câu 1:", hay "Câu hỏi tự luận tình huống:" ở đầu câu.
 - Ngôn từ trong sáng, gần gũi với học sinh tiểu học (${grade || "Lớp 4"}).
@@ -803,7 +804,8 @@ BẠN PHẢI TUÂN THỦ NGHIÊM NGẶT 4 NGUYÊN TẮC SAU:
 - Đảm bảo các mức độ nhận thức: Nhận biết (${nhanBietPercent}%), Thông hiểu (${thongHieuPercent}%), Vận dụng (${vanDungPercent}%) đúng theo tỷ lệ % đã quy định trong ma trận. Ghi rõ mức độ nhận thức ("Nhận biết", "Thông hiểu", hoặc "Vận dụng") cho từng câu.
 - Số lượng câu hỏi và phân phối điểm từng phần phải khớp hoàn toàn với cấu trúc ma trận (Tổng điểm Phần I + Phần II = 10.0 điểm).
 
-2. NỘI DUNG CHUYÊN MÔN:
+2. NỘI DUNG CHUYÊN MÔN & TUYỆT ĐỐI KHÔNG TRÙNG LẶP:
+- TUYỆT ĐỐI KHÔNG ĐƯỢC TRÙNG LẶP CÂU HỎI: Tất cả các câu hỏi trong đề phải hoàn toàn độc lập, khác biệt về kiến thức và tình huống. Không lặp lại câu hỏi hay nội dung kiểm tra.
 - Nội dung câu hỏi bám sát 100% chương trình Tin học tiểu học của đúng ${grade} (đã chọn ở Bước 1) và đúng "${selectedTopicTitle}" (đã chọn ở Bước 3). Tuyệt đối không lấy bài học của khối khác.
 - Phần nội dung câu hỏi (trường "question") CHỈ nêu trực tiếp nội dung câu hỏi, tuyệt đối KHÔNG ghi các nhãn tiền tố như "[Tin học 4 - Chủ đề 1]", "Câu 1:", hay "Câu hỏi tự luận tình huống:" ở đầu câu.
 - Lời văn trong sáng, dễ hiểu, phù hợp với lứa tuổi học sinh tiểu học.
