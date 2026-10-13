@@ -1,5 +1,6 @@
 import { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
+import { syncEntireStateToFirestore } from "../services/firebaseService";
 
 export interface OperationLogEntry {
   id: string;
@@ -481,6 +482,21 @@ export async function syncStateToCodebase(
   });
 
   const mergedLocal = saveCachedLocalState(payload, nowStr);
+
+  // Đồng bộ thời gian thực lên Firebase Firestore
+  syncEntireStateToFirestore({
+    ...payload,
+    classes: mergedLocal.classes,
+    assignments: mergedLocal.assignments,
+    submissions: mergedLocal.submissions,
+    tt27RegularRecords: mergedLocal.tt27RegularRecords,
+    tt27PeriodicRecords: mergedLocal.tt27PeriodicRecords,
+    operationHistory: mergedLocal.operationHistory,
+    examBuilderDraft: mergedLocal.examBuilderDraft,
+    deletedIds: mergedLocal.deletedIds,
+  }).catch((err) => {
+    console.warn("Lỗi đồng bộ Firebase:", err);
+  });
 
   try {
     const res = await fetch("/api/system/sync-to-code", {

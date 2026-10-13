@@ -58,6 +58,16 @@ import { StudentPortalView } from "./components/StudentPortalView";
 import { ClassAnalyticsView } from "./components/ClassAnalyticsView";
 import { ClassManagerView, INITIAL_CLASSES, ClassRoom } from "./components/ClassManagerView";
 import { Circular27AssessmentView } from "./components/Circular27AssessmentView";
+import {
+  subscribeAssignments,
+  subscribeClasses,
+  subscribeSubmissions,
+  subscribeSystemState,
+  seedInitialFirestoreDataIfEmpty,
+  saveSubmissionToFirestore,
+  deleteSubmissionFromFirestore,
+  deleteAssignmentFromFirestore,
+} from "./services/firebaseService";
 
 type ActiveTab =
   | "dashboard"
@@ -138,6 +148,49 @@ export default function App() {
       }
     });
   }, [activeTab]);
+
+  // Lắng nghe cơ sở dữ liệu Firebase Firestore thời gian thực (Realtime Multi-Device Sync)
+  useEffect(() => {
+    seedInitialFirestoreDataIfEmpty(INITIAL_CLASSES, INITIAL_ASSIGNMENTS, INITIAL_SUBMISSIONS).catch(() => {});
+
+    // Lắng nghe Đề thi thời gian thực
+    const unsubAssignments = subscribeAssignments((remoteAssignments) => {
+      if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
+        setAssignments(remoteAssignments);
+      }
+    });
+
+    // Lắng nghe Lớp học & Học sinh thời gian thực
+    const unsubClasses = subscribeClasses((remoteClasses) => {
+      if (Array.isArray(remoteClasses) && remoteClasses.length > 0) {
+        setClassesList(remoteClasses);
+      }
+    });
+
+    // Lắng nghe Bài nộp của học sinh thời gian thực
+    const unsubSubmissions = subscribeSubmissions((remoteSubmissions) => {
+      if (Array.isArray(remoteSubmissions)) {
+        setSubmissions(remoteSubmissions);
+      }
+    });
+
+    // Lắng nghe Trạng thái hệ thống thời gian thực
+    const unsubSystemState = subscribeSystemState((remoteState) => {
+      if (remoteState?.operationHistory && Array.isArray(remoteState.operationHistory)) {
+        setOperationHistory(remoteState.operationHistory);
+      }
+      if (remoteState?.lastUpdatedAt) {
+        setLastSyncTime(remoteState.lastUpdatedAt);
+      }
+    });
+
+    return () => {
+      unsubAssignments();
+      unsubClasses();
+      unsubSubmissions();
+      unsubSystemState();
+    };
+  }, []);
 
   // Filters on Teacher Dashboard
   const [classFilter, setClassFilter] = useState<string>("all");
@@ -239,6 +292,7 @@ export default function App() {
   };
 
   const handleDeleteSingleSubmission = (id: string) => {
+    deleteSubmissionFromFirestore(id).catch(() => {});
     setSubmissions((prev) => {
       const targetSub = prev.find((s) => s.id === id);
       const next = prev.filter((s) => s.id !== id);
@@ -326,6 +380,7 @@ export default function App() {
   };
 
   const handleDeleteAssignment = (assignmentId: string) => {
+    deleteAssignmentFromFirestore(assignmentId).catch(() => {});
     setAssignments((prev) => {
       const targetAsg = prev.find((a) => a.id === assignmentId);
       const next = prev.filter((a) => a.id !== assignmentId);
@@ -340,6 +395,7 @@ export default function App() {
   };
 
   const handleNewStudentSubmission = (newSub: StudentSubmission) => {
+    saveSubmissionToFirestore(newSub).catch(() => {});
     setSubmissions((prev) => {
       const exists = prev.some((s) => s.id === newSub.id);
       const next = exists

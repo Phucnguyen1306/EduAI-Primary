@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Bài tập / đề kiểm tra Tin học tiểu học",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "title": { "type": "string" },
+        "grade": { "type": "string" },
+        "className": { "type": "string" },
+        "targetClassNames": { "type": "array" },
+        "fileType": { "type": "string" },
+        "studentPrompt": { "type": "string" },
+        "isSemesterExam": { "type": "boolean" },
+        "standardFileNamePattern": { "type": "string" },
+        "checklist": { "type": "array" },
+        "theoryExam": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "title", "grade", "className", "fileType"]
+    },
+    "ClassRoom": {
+      "title": "ClassRoom",
+      "description": "Lớp học và danh sách học sinh",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "grade": { "type": "string" },
+        "name": { "type": "string" },
+        "students": { "type": "array" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "grade", "name"]
+    },
+    "StudentSubmission": {
+      "title": "StudentSubmission",
+      "description": "Bài làm và kết quả thi của học sinh",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "assignmentId": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "className": { "type": "string" },
+        "grade": { "type": "string" },
+        "score": { "type": "number" },
+        "status": { "type": "string" },
+        "theoryAnswers": { "type": "array" },
+        "submittedAt": { "type": "string" },
+        "aiFeedback": { "type": "string" }
+      },
+      "required": ["id", "assignmentId", "studentId", "studentName", "className", "grade"]
+    },
+    "SystemState": {
+      "title": "SystemState",
+      "description": "Trạng thái nháp và lịch sử hoạt động",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "lastUpdatedAt": { "type": "string" },
+        "examBuilderDraft": { "type": "object" },
+        "tt27RegularRecords": { "type": "object" },
+        "tt27PeriodicRecords": { "type": "object" },
+        "operationHistory": { "type": "array" }
+      },
+      "required": ["id", "lastUpdatedAt"]
+    }
+  },
+  "firestore": {
+    "/assignments/{assignmentId}": {
+      "schema": "Assignment",
+      "description": "Danh sách các đề thi và bài tập được giao"
+    },
+    "/classes/{classId}": {
+      "schema": "ClassRoom",
+      "description": "Danh mục các lớp học và học sinh"
+    },
+    "/submissions/{submissionId}": {
+      "schema": "StudentSubmission",
+      "description": "Danh sách bài nộp và kết quả chấm điểm của học sinh"
+    },
+    "/system_state/{stateId}": {
+      "schema": "SystemState",
+      "description": "Dữ liệu lưu nháp và cấu hình đồng bộ"
+    }
+  }
+}
