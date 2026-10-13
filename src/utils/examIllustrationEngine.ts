@@ -507,22 +507,32 @@ export function enrichExamWithAutoIllustrations(
 ): TheoryExam {
   const cleanedMcqs: MultipleChoiceQuestion[] = (exam.multipleChoice || []).map((q, idx) => {
     const cleanedQuestion = cleanQuestionText(q.question);
+    const isIllustrationDisabled =
+      q.hasNoIllustration === true ||
+      q.illustrationImageDataUrl === "" ||
+      q.illustrationImageDataUrl === "none";
+
     const noteText =
       q.illustrationNote && q.illustrationNote.trim()
         ? q.illustrationNote
         : cleanedQuestion;
     const variant = typeof q.illustrationVariant === "number" ? q.illustrationVariant : idx;
-    const autoImg =
-      q.illustrationImageDataUrl && q.illustrationImageDataUrl.trim()
-        ? q.illustrationImageDataUrl
-        : generateIllustrationDataUrl(noteText, variant);
+
+    const autoImg = isIllustrationDisabled
+      ? ""
+      : q.illustrationImageDataUrl && q.illustrationImageDataUrl.trim()
+      ? q.illustrationImageDataUrl
+      : generateIllustrationDataUrl(noteText, variant);
 
     return {
       ...q,
       question: cleanedQuestion,
-      illustrationNote: cleanIllustrationCaption(q.illustrationNote) || cleanedQuestion,
+      illustrationNote: isIllustrationDisabled
+        ? q.illustrationNote || ""
+        : cleanIllustrationCaption(q.illustrationNote) || cleanedQuestion,
       illustrationImageDataUrl: autoImg,
       illustrationVariant: variant,
+      hasNoIllustration: isIllustrationDisabled,
     };
   });
 
@@ -535,42 +545,63 @@ export function enrichExamWithAutoIllustrations(
 
   const cleanedEssays: ShortAnswerQuestion[] = rawEssays.map((sa, idx) => {
     const cleanedQuestion = cleanQuestionText(sa.question);
+    const isIllustrationDisabled =
+      sa.hasNoIllustration === true ||
+      sa.illustrationImageDataUrl === "" ||
+      sa.illustrationImageDataUrl === "none";
+
     const noteText =
       sa.illustrationNote && sa.illustrationNote.trim()
         ? sa.illustrationNote
         : cleanedQuestion;
     const variant = typeof sa.illustrationVariant === "number" ? sa.illustrationVariant : idx;
-    const autoImg =
-      sa.illustrationImageDataUrl && sa.illustrationImageDataUrl.trim()
-        ? sa.illustrationImageDataUrl
-        : generateIllustrationDataUrl(noteText, variant);
+
+    const autoImg = isIllustrationDisabled
+      ? ""
+      : sa.illustrationImageDataUrl && sa.illustrationImageDataUrl.trim()
+      ? sa.illustrationImageDataUrl
+      : generateIllustrationDataUrl(noteText, variant);
 
     return {
       ...sa,
       question: cleanedQuestion,
-      illustrationNote: cleanIllustrationCaption(sa.illustrationNote) || cleanedQuestion,
+      illustrationNote: isIllustrationDisabled
+        ? sa.illustrationNote || ""
+        : cleanIllustrationCaption(sa.illustrationNote) || cleanedQuestion,
       illustrationImageDataUrl: autoImg,
       illustrationVariant: variant,
+      hasNoIllustration: isIllustrationDisabled,
     };
   });
 
   const cleanedPracticeTasks: SemesterPracticeTask[] | undefined =
     exam.semesterBlueprint?.practiceTasks?.map((pt, idx) => {
+      const isIllustrationDisabled =
+        pt.hasNoIllustration === true ||
+        pt.illustrationImageDataUrl === "" ||
+        pt.illustrationImageDataUrl === "none";
+
       const noteText =
         pt.illustrationNote && pt.illustrationNote.trim()
           ? pt.illustrationNote
           : `${pt.softwareType} ${pt.title} ${pt.instructions}`;
       const variant = typeof pt.illustrationVariant === "number" ? pt.illustrationVariant : idx;
-      const autoImg =
-        pt.illustrationImageDataUrl && pt.illustrationImageDataUrl.trim()
-          ? pt.illustrationImageDataUrl
-          : generateIllustrationDataUrl(noteText, variant);
+
+      const autoImg = isIllustrationDisabled
+        ? ""
+        : pt.illustrationImageDataUrl && pt.illustrationImageDataUrl.trim()
+        ? pt.illustrationImageDataUrl
+        : generateIllustrationDataUrl(noteText, variant);
+
       return {
         ...pt,
         title: cleanQuestionText(pt.title),
-        illustrationNote: cleanIllustrationCaption(pt.illustrationNote) || pt.title,
+        illustrationNote: isIllustrationDisabled
+          ? pt.illustrationNote || ""
+          : cleanIllustrationCaption(pt.illustrationNote) || pt.title,
         illustrationImageDataUrl: autoImg,
         illustrationVariant: variant,
+        hasNoIllustration: isIllustrationDisabled,
       };
     });
 

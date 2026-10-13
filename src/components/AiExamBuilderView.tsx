@@ -2304,8 +2304,9 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       | "points"
       | "illustrationNote"
       | "cognitiveLevel"
-      | "illustrationImageDataUrl",
-    value: string | number
+      | "illustrationImageDataUrl"
+      | "hasNoIllustration",
+    value: string | number | boolean
   ) => {
     if (!generatedAssignment || !generatedAssignment.theoryExam) return;
     const exam = generatedAssignment.theoryExam;
@@ -2323,14 +2324,72 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || !generatedAssignment?.theoryExam) return;
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === "string") {
-        handleUpdateMcqField(qIndex, "illustrationImageDataUrl", reader.result);
+        const exam = generatedAssignment.theoryExam!;
+        const updatedMcqs = exam.multipleChoice.map((q, idx) =>
+          idx === qIndex
+            ? {
+                ...q,
+                illustrationImageDataUrl: reader.result as string,
+                hasNoIllustration: false,
+              }
+            : q
+        );
+        syncTheoryExamAndChecklist({
+          ...exam,
+          multipleChoice: updatedMcqs,
+        });
       }
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const handleRemoveMcqIllustration = (qIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const nextMcqs = exam.multipleChoice.map((q, idx) =>
+      idx === qIdx
+        ? {
+            ...q,
+            illustrationImageDataUrl: "",
+            hasNoIllustration: true,
+          }
+        : q
+    );
+    syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+  };
+
+  const handleRestoreMcqIllustration = (qIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const targetQ = exam.multipleChoice[qIdx];
+    if (!targetQ) return;
+    const variant = targetQ.illustrationVariant ?? 0;
+    const caption = cleanIllustrationCaption(
+      targetQ.illustrationNote || "",
+      targetQ.question
+    );
+    const dataUrl = generateIllustrationDataUrl(
+      targetQ.question,
+      caption,
+      variant,
+      generatedAssignment.grade
+    );
+    const nextMcqs = exam.multipleChoice.map((q, idx) =>
+      idx === qIdx
+        ? {
+            ...q,
+            hasNoIllustration: false,
+            illustrationNote: caption,
+            illustrationImageDataUrl: dataUrl,
+          }
+        : q
+    );
+    syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
   };
 
   const handleUpdateMcqOption = (qIndex: number, optIndex: number, textValue: string) => {
@@ -2785,6 +2844,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             illustrationNote: nextCaption,
             illustrationVariant: nextVariant,
             illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
           }
         : q
     );
@@ -2815,6 +2875,61 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             illustrationNote: nextCaption,
             illustrationVariant: nextVariant,
             illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
+          }
+        : eq
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      shortAnswers: nextEssays,
+      shortAnswer: nextEssays[0] || exam.shortAnswer,
+    });
+  };
+
+  const handleRemoveEssayIllustration = (eIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const currentEssays = getActiveShortAnswers(exam);
+    const nextEssays = currentEssays.map((eq, idx) =>
+      idx === eIdx
+        ? {
+            ...eq,
+            illustrationImageDataUrl: "",
+            hasNoIllustration: true,
+          }
+        : eq
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      shortAnswers: nextEssays,
+      shortAnswer: nextEssays[0] || exam.shortAnswer,
+    });
+  };
+
+  const handleRestoreEssayIllustration = (eIdx: number) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const currentEssays = getActiveShortAnswers(exam);
+    const targetEq = currentEssays[eIdx];
+    if (!targetEq) return;
+    const variant = targetEq.illustrationVariant ?? 0;
+    const caption = cleanIllustrationCaption(
+      targetEq.illustrationNote || "",
+      targetEq.question
+    );
+    const dataUrl = generateIllustrationDataUrl(
+      targetEq.question,
+      caption,
+      variant,
+      generatedAssignment.grade
+    );
+    const nextEssays = currentEssays.map((eq, idx) =>
+      idx === eIdx
+        ? {
+            ...eq,
+            hasNoIllustration: false,
+            illustrationNote: caption,
+            illustrationImageDataUrl: dataUrl,
           }
         : eq
     );
@@ -2841,6 +2956,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             ? {
                 ...eq,
                 illustrationImageDataUrl: reader.result as string,
+                hasNoIllustration: false,
               }
             : eq
         );
@@ -2879,6 +2995,65 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             illustrationNote: nextCaption,
             illustrationVariant: nextVariant,
             illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
+          }
+        : pt
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+  };
+
+  const handleRemovePracticeIllustration = (pIdx: number) => {
+    if (!generatedAssignment?.theoryExam?.semesterBlueprint) return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    const nextTasks = bp.practiceTasks.map((pt, idx) =>
+      idx === pIdx
+        ? {
+            ...pt,
+            illustrationImageDataUrl: "",
+            hasNoIllustration: true,
+          }
+        : pt
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+  };
+
+  const handleRestorePracticeIllustration = (pIdx: number) => {
+    if (!generatedAssignment?.theoryExam?.semesterBlueprint) return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    const targetPt = bp.practiceTasks[pIdx];
+    if (!targetPt) return;
+    const variant = targetPt.illustrationVariant ?? 0;
+    const caption = cleanIllustrationCaption(
+      targetPt.illustrationNote || "",
+      `${targetPt.title} ${targetPt.instructions}`
+    );
+    const dataUrl = generateIllustrationDataUrl(
+      `${targetPt.title} ${targetPt.instructions}`,
+      caption,
+      variant,
+      generatedAssignment.grade
+    );
+    const nextTasks = bp.practiceTasks.map((pt, idx) =>
+      idx === pIdx
+        ? {
+            ...pt,
+            hasNoIllustration: false,
+            illustrationNote: caption,
+            illustrationImageDataUrl: dataUrl,
           }
         : pt
     );
@@ -2907,6 +3082,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
             ? {
                 ...pt,
                 illustrationImageDataUrl: reader.result as string,
+                hasNoIllustration: false,
               }
             : pt
         );
@@ -4327,71 +4503,142 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           )}
                         </div>
 
-                        {/* HÌNH ẢNH MINH HỌA TỰ ĐỘNG CỦA HỆ THỐNG + NÚT ĐỔI HÌNH KHÁC */}
-                        <div className="p-3 bg-sky-50/80 border border-dashed border-sky-300 rounded-xl space-y-2">
+                        {/* HÌNH ẢNH MINH HỌA TỰ ĐỘNG CỦA HỆ THỐNG + NÚT ĐỔI HÌNH KHÁC + NÚT XÓA HÌNH */}
+                        <div
+                          className={`p-3 rounded-xl space-y-2 border ${
+                            q.hasNoIllustration || !q.illustrationImageDataUrl
+                              ? "bg-slate-50/90 border-dashed border-slate-300"
+                              : "bg-sky-50/80 border-dashed border-sky-300"
+                          }`}
+                        >
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <label className="text-[11px] font-bold text-[#0284C7] flex items-center gap-1">
+                            <label
+                              className={`text-[11px] font-bold flex items-center gap-1.5 ${
+                                q.hasNoIllustration || !q.illustrationImageDataUrl
+                                  ? "text-slate-600"
+                                  : "text-[#0284C7]"
+                              }`}
+                            >
                               <ImageIcon className="w-3.5 h-3.5" />
-                              Hình ảnh minh họa tự động cho Câu {idx + 1} (Có thể đổi hình khác):
+                              {q.hasNoIllustration || !q.illustrationImageDataUrl ? (
+                                <span>
+                                  Hình minh họa Câu {idx + 1}:{" "}
+                                  <span className="font-normal text-slate-500 italic">
+                                    (Đã xóa / Không dùng hình minh họa)
+                                  </span>
+                                </span>
+                              ) : (
+                                <span>
+                                  Hình ảnh minh họa tự động cho Câu {idx + 1} (Có thể đổi hình hoặc xóa nếu không cần):
+                                </span>
+                              )}
                             </label>
+
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handleCycleMcqIllustration(idx)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-white hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <RefreshCw className="w-3 h-3" />
-                                Đổi hình minh họa khác (Mẫu {((q.illustrationVariant ?? 0) % 5) + 1}/5)
-                              </button>
-                              <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-sky-300 rounded-lg cursor-pointer">
-                                <Upload className="w-3 h-3 text-[#0284C7]" />
-                                <span>Tải ảnh từ máy</span>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(e) => handleUploadMcqIllustrationImage(idx, e)}
-                                  className="hidden"
-                                />
-                              </label>
+                              {q.hasNoIllustration || !q.illustrationImageDataUrl ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRestoreMcqIllustration(idx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-white hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                                    title="Tạo lại hình minh họa cho câu hỏi này"
+                                  >
+                                    <Sparkles className="w-3 h-3 text-[#0284C7]" />
+                                    Khôi phục / Thêm hình ảnh
+                                  </button>
+                                  <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer">
+                                    <Upload className="w-3 h-3 text-[#0284C7]" />
+                                    <span>Tải ảnh từ máy</span>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => handleUploadMcqIllustrationImage(idx, e)}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCycleMcqIllustration(idx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-white hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                                    title="Đổi kiểu hình minh họa khác trong bộ 5 mẫu vẽ"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    Đổi hình khác (Mẫu {((q.illustrationVariant ?? 0) % 5) + 1}/5)
+                                  </button>
+                                  <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-sky-300 rounded-lg cursor-pointer">
+                                    <Upload className="w-3 h-3 text-[#0284C7]" />
+                                    <span>Tải ảnh từ máy</span>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => handleUploadMcqIllustrationImage(idx, e)}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveMcqIllustration(idx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                                    title="Xóa hình minh họa này nếu câu hỏi không cần thiết phải có hình"
+                                  >
+                                    <Trash2 className="w-3 h-3 text-rose-500" />
+                                    Xóa hình minh họa
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
 
-                          {q.illustrationImageDataUrl && (
-                            <div className="flex items-center justify-center bg-white p-2 rounded-lg border border-sky-200">
+                          {!q.hasNoIllustration && q.illustrationImageDataUrl && (
+                            <div className="relative group flex items-center justify-center bg-white p-2 rounded-lg border border-sky-200">
                               <img
                                 src={q.illustrationImageDataUrl}
                                 alt="Minh họa câu hỏi"
                                 className="max-h-40 rounded-lg object-contain"
                               />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveMcqIllustration(idx)}
+                                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
+                                title="Xóa hình minh họa cho câu hỏi này"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                Xóa hình này
+                              </button>
                             </div>
                           )}
 
-                          <input
-                            type="text"
-                            value={q.illustrationNote || ""}
-                            onChange={(e) => {
-                              const nextNote = e.target.value;
-                              const exam = generatedAssignment.theoryExam!;
-                              const nextDataUrl = generateIllustrationDataUrl(
-                                q.question,
-                                nextNote,
-                                q.illustrationVariant ?? 0,
-                                generatedAssignment.grade
-                              );
-                              const nextMcqs = exam.multipleChoice.map((item, qI) =>
-                                qI === idx
-                                  ? {
-                                      ...item,
-                                      illustrationNote: nextNote,
-                                      illustrationImageDataUrl: nextDataUrl,
-                                    }
-                                  : item
-                              );
-                              syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
-                            }}
-                            placeholder="Mô tả nội dung hình minh họa (hệ thống tự động vẽ lại theo mô tả)..."
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900 focus:outline-none focus:border-[#0284C7]"
-                          />
+                          {!q.hasNoIllustration && q.illustrationImageDataUrl && (
+                            <input
+                              type="text"
+                              value={q.illustrationNote || ""}
+                              onChange={(e) => {
+                                const nextNote = e.target.value;
+                                const exam = generatedAssignment.theoryExam!;
+                                const nextDataUrl = generateIllustrationDataUrl(
+                                  q.question,
+                                  nextNote,
+                                  q.illustrationVariant ?? 0,
+                                  generatedAssignment.grade
+                                );
+                                const nextMcqs = exam.multipleChoice.map((item, qI) =>
+                                  qI === idx
+                                    ? {
+                                        ...item,
+                                        illustrationNote: nextNote,
+                                        illustrationImageDataUrl: nextDataUrl,
+                                      }
+                                    : item
+                                );
+                                syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+                              }}
+                              placeholder="Mô tả nội dung hình minh họa (hệ thống tự động vẽ lại theo mô tả)..."
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900 focus:outline-none focus:border-[#0284C7]"
+                            />
+                          )}
                         </div>
 
                         <div className="space-y-1.5">
@@ -4534,75 +4781,145 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                           </button>
                         </div>
 
-                        <div className="p-3 bg-white border border-sky-200 rounded-xl space-y-2">
+                        <div
+                          className={`p-3 rounded-xl space-y-2 border ${
+                            sa.hasNoIllustration || !sa.illustrationImageDataUrl
+                              ? "bg-slate-50/90 border-dashed border-slate-300"
+                              : "bg-white border border-sky-200"
+                          }`}
+                        >
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <label className="text-[11px] font-bold text-[#0284C7] flex items-center gap-1">
+                            <label
+                              className={`text-[11px] font-bold flex items-center gap-1.5 ${
+                                sa.hasNoIllustration || !sa.illustrationImageDataUrl
+                                  ? "text-slate-600"
+                                  : "text-[#0284C7]"
+                              }`}
+                            >
                               <ImageIcon className="w-3.5 h-3.5" />
-                              Hình ảnh minh họa tự động cho câu tự luận {sIdx + 1} (Có thể đổi hình khác):
+                              {sa.hasNoIllustration || !sa.illustrationImageDataUrl ? (
+                                <span>
+                                  Hình minh họa Câu tự luận {sIdx + 1}:{" "}
+                                  <span className="font-normal text-slate-500 italic">
+                                    (Đã xóa / Không dùng hình minh họa)
+                                  </span>
+                                </span>
+                              ) : (
+                                <span>
+                                  Hình ảnh minh họa tự động cho câu tự luận {sIdx + 1} (Có thể đổi hình hoặc xóa nếu không cần):
+                                </span>
+                              )}
                             </label>
+
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => handleCycleEssayIllustration(sIdx)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
-                              >
-                                <RefreshCw className="w-3 h-3" />
-                                Đổi hình minh họa khác (Mẫu {((sa.illustrationVariant ?? 0) % 5) + 1}/5)
-                              </button>
-                              <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer">
-                                <Upload className="w-3 h-3 text-slate-600" />
-                                <span>Tải ảnh từ máy</span>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(e) => handleUploadEssayCustomImage(sIdx, e)}
-                                  className="hidden"
-                                />
-                              </label>
+                              {sa.hasNoIllustration || !sa.illustrationImageDataUrl ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRestoreEssayIllustration(sIdx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                                    title="Tạo lại hình minh họa cho câu tự luận này"
+                                  >
+                                    <Sparkles className="w-3 h-3 text-[#0284C7]" />
+                                    Khôi phục / Thêm hình ảnh
+                                  </button>
+                                  <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer">
+                                    <Upload className="w-3 h-3 text-slate-600" />
+                                    <span>Tải ảnh từ máy</span>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => handleUploadEssayCustomImage(sIdx, e)}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCycleEssayIllustration(sIdx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-300 rounded-lg transition-colors cursor-pointer"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    Đổi hình khác (Mẫu {((sa.illustrationVariant ?? 0) % 5) + 1}/5)
+                                  </button>
+                                  <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg cursor-pointer">
+                                    <Upload className="w-3 h-3 text-slate-600" />
+                                    <span>Tải ảnh từ máy</span>
+                                    <input
+                                      type="file"
+                                      accept="image/*"
+                                      onChange={(e) => handleUploadEssayCustomImage(sIdx, e)}
+                                      className="hidden"
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveEssayIllustration(sIdx)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                                    title="Xóa hình minh họa này nếu câu hỏi không cần thiết phải có hình"
+                                  >
+                                    <Trash2 className="w-3 h-3 text-rose-500" />
+                                    Xóa hình minh họa
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </div>
 
-                          {sa.illustrationImageDataUrl && (
-                            <div className="bg-slate-50 p-2 rounded-lg border border-sky-200 flex justify-center">
+                          {!sa.hasNoIllustration && sa.illustrationImageDataUrl && (
+                            <div className="relative group bg-slate-50 p-2 rounded-lg border border-sky-200 flex justify-center">
                               <img
                                 src={sa.illustrationImageDataUrl}
                                 alt={`Minh họa tự luận ${sIdx + 1}`}
                                 className="max-h-40 rounded-lg object-contain"
                               />
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveEssayIllustration(sIdx)}
+                                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
+                                title="Xóa hình minh họa cho câu hỏi này"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                Xóa hình này
+                              </button>
                             </div>
                           )}
 
-                          <input
-                            type="text"
-                            value={sa.illustrationNote || ""}
-                            onChange={(e) => {
-                              const nextNote = e.target.value;
-                              const exam = generatedAssignment.theoryExam!;
-                              const nextDataUrl = generateIllustrationDataUrl(
-                                sa.question,
-                                nextNote,
-                                sa.illustrationVariant ?? 0,
-                                generatedAssignment.grade
-                              );
-                              const currentEssays = getActiveShortAnswers(exam);
-                              const nextEssays = currentEssays.map((item, eI) =>
-                                eI === sIdx
-                                  ? {
-                                      ...item,
-                                      illustrationNote: nextNote,
-                                      illustrationImageDataUrl: nextDataUrl,
-                                    }
-                                  : item
-                              );
-                              syncTheoryExamAndChecklist({
-                                ...exam,
-                                shortAnswers: nextEssays,
-                                shortAnswer: nextEssays[0] || exam.shortAnswer,
-                              });
-                            }}
-                            placeholder="Mô tả hình ảnh minh họa..."
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900"
-                          />
+                          {!sa.hasNoIllustration && sa.illustrationImageDataUrl && (
+                            <input
+                              type="text"
+                              value={sa.illustrationNote || ""}
+                              onChange={(e) => {
+                                const nextNote = e.target.value;
+                                const exam = generatedAssignment.theoryExam!;
+                                const nextDataUrl = generateIllustrationDataUrl(
+                                  sa.question,
+                                  nextNote,
+                                  sa.illustrationVariant ?? 0,
+                                  generatedAssignment.grade
+                                );
+                                const currentEssays = getActiveShortAnswers(exam);
+                                const nextEssays = currentEssays.map((item, eI) =>
+                                  eI === sIdx
+                                    ? {
+                                        ...item,
+                                        illustrationNote: nextNote,
+                                        illustrationImageDataUrl: nextDataUrl,
+                                      }
+                                    : item
+                                );
+                                syncTheoryExamAndChecklist({
+                                  ...exam,
+                                  shortAnswers: nextEssays,
+                                  shortAnswer: nextEssays[0] || exam.shortAnswer,
+                                });
+                              }}
+                              placeholder="Mô tả hình ảnh minh họa..."
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900"
+                            />
+                          )}
                         </div>
 
                         <div>
@@ -4748,56 +5065,126 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             />
                           </div>
 
-                          <div className="p-3 bg-white border border-emerald-200 rounded-xl space-y-2">
+                          <div
+                            className={`p-3 rounded-xl space-y-2 border ${
+                              pt.hasNoIllustration || !pt.illustrationImageDataUrl
+                                ? "bg-slate-50/90 border-dashed border-slate-300"
+                                : "bg-white border border-emerald-200"
+                            }`}
+                          >
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <label className="text-[11px] font-bold text-emerald-800 flex items-center gap-1.5">
+                              <label
+                                className={`text-[11px] font-bold flex items-center gap-1.5 ${
+                                  pt.hasNoIllustration || !pt.illustrationImageDataUrl
+                                    ? "text-slate-600"
+                                    : "text-emerald-800"
+                                }`}
+                              >
                                 <ImageIcon className="w-3.5 h-3.5" />
-                                Hình ảnh minh họa mẫu bài thực hành (Có thể đổi hình khác):
+                                {pt.hasNoIllustration || !pt.illustrationImageDataUrl ? (
+                                  <span>
+                                    Hình minh họa Bài thực hành {pIdx + 1}:{" "}
+                                    <span className="font-normal text-slate-500 italic">
+                                      (Đã xóa / Không dùng hình minh họa)
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <span>
+                                    Hình ảnh minh họa mẫu bài thực hành (Có thể đổi hình hoặc xóa nếu không cần):
+                                  </span>
+                                )}
                               </label>
+
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => handleCyclePracticeIllustration(pIdx)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer"
-                                >
-                                  <RefreshCw className="w-3 h-3" />
-                                  Đổi hình minh họa khác (Mẫu {((pt.illustrationVariant ?? 0) % 5) + 1}/5)
-                                </button>
-                                <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer">
-                                  <Upload className="w-3 h-3 text-slate-600" />
-                                  Tải ảnh từ máy
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={(e) => handleUploadPracticeCustomImage(pIdx, e)}
-                                    className="hidden"
-                                  />
-                                </label>
+                                {pt.hasNoIllustration || !pt.illustrationImageDataUrl ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRestorePracticeIllustration(pIdx)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer"
+                                      title="Tạo lại hình minh họa cho bài thực hành này"
+                                    >
+                                      <Sparkles className="w-3 h-3 text-emerald-700" />
+                                      Khôi phục / Thêm hình ảnh
+                                    </button>
+                                    <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer">
+                                      <Upload className="w-3 h-3 text-slate-600" />
+                                      <span>Tải ảnh từ máy</span>
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        onChange={(e) => handleUploadPracticeCustomImage(pIdx, e)}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCyclePracticeIllustration(pIdx)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer"
+                                    >
+                                      <RefreshCw className="w-3 h-3" />
+                                      Đổi hình khác (Mẫu {((pt.illustrationVariant ?? 0) % 5) + 1}/5)
+                                    </button>
+                                    <label className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors cursor-pointer">
+                                      <Upload className="w-3 h-3 text-slate-600" />
+                                      Tải ảnh từ máy
+                                      <input
+                                        type="file"
+                                        accept="image/*"
+                                        onChange={(e) => handleUploadPracticeCustomImage(pIdx, e)}
+                                        className="hidden"
+                                      />
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemovePracticeIllustration(pIdx)}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition-colors cursor-pointer"
+                                      title="Xóa hình minh họa này nếu bài thực hành không cần thiết phải có hình"
+                                    >
+                                      <Trash2 className="w-3 h-3 text-rose-500" />
+                                      Xóa hình minh họa
+                                    </button>
+                                  </>
+                                )}
                               </div>
                             </div>
 
-                            {pt.illustrationImageDataUrl && (
-                              <div className="bg-slate-50 p-2 rounded-lg border border-emerald-200 flex justify-center">
+                            {!pt.hasNoIllustration && pt.illustrationImageDataUrl && (
+                              <div className="relative group bg-slate-50 p-2 rounded-lg border border-emerald-200 flex justify-center">
                                 <img
                                   src={pt.illustrationImageDataUrl}
                                   alt={`Minh họa thực hành ${pIdx + 1}`}
                                   className="max-h-44 w-auto rounded-lg object-contain"
                                 />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemovePracticeIllustration(pIdx)}
+                                  className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
+                                  title="Xóa hình minh họa cho bài thực hành này"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                  Xóa hình này
+                                </button>
                               </div>
                             )}
 
-                            <input
-                              type="text"
-                              value={pt.illustrationNote || ""}
-                              onChange={(e) =>
-                                handleUpdateSemesterPracticeTask(
-                                  pIdx,
-                                  "illustrationNote",
-                                  e.target.value
-                                )
-                              }
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-emerald-200 rounded-lg text-emerald-900"
-                            />
+                            {!pt.hasNoIllustration && pt.illustrationImageDataUrl && (
+                              <input
+                                type="text"
+                                value={pt.illustrationNote || ""}
+                                onChange={(e) =>
+                                  handleUpdateSemesterPracticeTask(
+                                    pIdx,
+                                    "illustrationNote",
+                                    e.target.value
+                                  )
+                                }
+                                className="w-full px-3 py-1.5 text-xs bg-white border border-emerald-200 rounded-lg text-emerald-900"
+                              />
+                            )}
                           </div>
 
                           <div>

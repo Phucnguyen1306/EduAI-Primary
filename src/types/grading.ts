@@ -23,6 +23,7 @@ export interface MultipleChoiceQuestion {
   illustrationNote?: string;
   illustrationImageDataUrl?: string;
   illustrationVariant?: number;
+  hasNoIllustration?: boolean;
 }
 
 export interface ShortAnswerQuestion {
@@ -36,6 +37,7 @@ export interface ShortAnswerQuestion {
   illustrationImageDataUrl?: string;
   illustrationVariant?: number;
   gradingGuide?: string;
+  hasNoIllustration?: boolean;
 }
 
 export interface SemesterPracticeTask {
@@ -49,6 +51,7 @@ export interface SemesterPracticeTask {
   illustrationVariant?: number;
   points: number;
   gradingRubric: string;
+  hasNoIllustration?: boolean;
 }
 
 export interface SemesterExamBlueprint {

@@ -232,7 +232,9 @@ restoreFromPersistentBackupOnBoot();
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+  const portArgIndex = process.argv.indexOf("--port");
+  const portFromArg = portArgIndex !== -1 ? Number(process.argv[portArgIndex + 1]) : null;
+  const PORT = portFromArg || Number(process.env.DEFAULT_APP_PORT) || 3000;
 
   app.use(express.json({ limit: "50mb" }));
 

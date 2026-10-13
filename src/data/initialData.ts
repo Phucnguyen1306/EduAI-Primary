@@ -2,17 +2,17 @@ import type { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
 
 /**
- * DỮ LIỆU KHỞI TẠO MẶC ĐỊNH TRONG CODE (NĂM HỌC 2026-2027)
- * - Đã nạp sẵn toàn bộ 22 Lớp (Khối 3: 3/1 -> 3/7; Khối 4: 4/1 -> 4/7; Khối 5: 5/1 -> 5/8)
- *   và 1.024 Học sinh mặc định từ danh sách trường (Mã định danh Bộ GD&ĐT, Họ tên, Ngày sinh, Mã lớp).
- * - Chưa có đề kiểm tra, chưa có dữ liệu bài nộp hay báo cáo đánh giá của học sinh vì hệ thống chưa sử dụng.
- * - Khi người dùng sử dụng hệ thống (tạo/chỉnh sửa lớp, thêm học sinh, tạo đề, nộp bài, chấm điểm, nhận xét TT27),
- *   hệ thống tự động cập nhật trực tiếp vào tệp mã nguồn này đến đúng thời điểm sử dụng.
+ * Thời điểm gần nhất hệ thống tự động cập nhật dữ liệu thao tác vào mã nguồn (src/data/initialData.ts)
  */
-
 export const LAST_CODE_SYNC_AT: string = "11/10/2026";
-export const LAST_CODE_SYNC_TIMESTAMP: string = "2026-10-11T08:36:48.383Z";
+export const LAST_CODE_SYNC_TIMESTAMP: string = "11/10/2026";
 
+/**
+ * Danh sách Lớp & Học sinh mặc định của hệ thống EduAI Primary
+ * (Trường TH-THCS Vĩnh Phú — Năm học 2026-2027).
+ * Mọi thao tác thêm/sửa/xóa lớp, học sinh hoặc tải lên tệp Excel / PDF (DS Up.pdf)
+ * đều được hệ thống tự động ghi đè trực tiếp vào mảng INITIAL_CLASSES này trong code.
+ */
 export const INITIAL_CLASSES: ClassRoom[] = [
   {
     "id": "cls-3-1",
@@ -6380,6 +6380,10 @@ export const INITIAL_CLASSES: ClassRoom[] = [
   }
 ];
 
+/**
+ * Dữ liệu đề kiểm tra, bài nộp, nhận xét Thông tư 27 và lịch sử thao tác được tự động cập nhật vào code
+ * trong quá trình người dùng thao tác đến thời điểm đang sử dụng (11/10/2026).
+ */
 export const INITIAL_ASSIGNMENTS: Assignment[] = [];
 
 export const INITIAL_SUBMISSIONS: StudentSubmission[] = [];
@@ -6397,8 +6401,7 @@ export const INITIAL_DELETED_IDS: {
   submissions: string[];
   classes: string[];
 } = {
-  assignments: [],
-  submissions: [],
-  classes: [],
+  "assignments": [],
+  "submissions": [],
+  "classes": []
 };
-

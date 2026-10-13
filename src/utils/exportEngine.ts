@@ -2045,7 +2045,7 @@ export async function exportSemesterExamToDocx(
         { bold: true, sizePt: 12, spaceAfter: 60 }
       )
     );
-    if (q.illustrationNote) {
+    if (!q.hasNoIllustration && q.illustrationImageDataUrl && q.illustrationNote) {
       p.push(
         makeWordParagraph(`   ${q.illustrationNote}`, {
           bold: true,
@@ -2087,7 +2087,7 @@ export async function exportSemesterExamToDocx(
         { bold: true, sizePt: 12, spaceAfter: 60 }
       )
     );
-    if (sa.illustrationNote) {
+    if (!sa.hasNoIllustration && sa.illustrationImageDataUrl && sa.illustrationNote) {
       p.push(
         makeWordParagraph(`   ${sa.illustrationNote}`, {
           bold: true,
@@ -2116,7 +2116,7 @@ export async function exportSemesterExamToDocx(
           spaceAfter: 60,
         })
       );
-      if (pt.illustrationNote) {
+      if (!pt.hasNoIllustration && pt.illustrationImageDataUrl && pt.illustrationNote) {
         p.push(
           makeWordParagraph(`   ${pt.illustrationNote}`, {
             bold: true,

@@ -1150,14 +1150,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                             q.illustrationNote || "",
                             pureQuestionText
                           );
-                          const autoImgUrl =
-                            q.illustrationImageDataUrl ||
-                            generateIllustrationDataUrl(
-                              pureQuestionText,
-                              illustrationCaption,
-                              q.illustrationVariant ?? 0,
-                              selectedAssignment.grade
-                            );
+                          const hasNoImg =
+                            q.hasNoIllustration === true ||
+                            q.illustrationImageDataUrl === "" ||
+                            q.illustrationImageDataUrl === "none";
+                          const autoImgUrl = hasNoImg
+                            ? ""
+                            : q.illustrationImageDataUrl ||
+                              generateIllustrationDataUrl(
+                                pureQuestionText,
+                                illustrationCaption,
+                                q.illustrationVariant ?? 0,
+                                selectedAssignment.grade
+                              );
                           const shuffledInfo = shuffledMcqMap[q.id || `mcq-${idx}`];
                           const displayOptions = shuffledInfo
                             ? shuffledInfo.shuffledOptions
@@ -1265,14 +1270,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                           sa.illustrationNote || "",
                           pureEssayQ
                         );
-                        const essayImgUrl =
-                          sa.illustrationImageDataUrl ||
-                          generateIllustrationDataUrl(
-                            pureEssayQ,
-                            essayCaption,
-                            sa.illustrationVariant ?? 0,
-                            selectedAssignment.grade
-                          );
+                        const hasNoEssayImg =
+                          sa.hasNoIllustration === true ||
+                          sa.illustrationImageDataUrl === "" ||
+                          sa.illustrationImageDataUrl === "none";
+                        const essayImgUrl = hasNoEssayImg
+                          ? ""
+                          : sa.illustrationImageDataUrl ||
+                            generateIllustrationDataUrl(
+                              pureEssayQ,
+                              essayCaption,
+                              sa.illustrationVariant ?? 0,
+                              selectedAssignment.grade
+                            );
 
                         return (
                           <div
