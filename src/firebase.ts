@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import { getMessaging, getToken, isSupported } from "firebase/messaging";
 import firebaseConfig from "../firebase-applet-config.json";
 
 // Khởi tạo ứng dụng Firebase với cấu hình tự động được cấp quyền từ AI Studio
@@ -7,6 +8,37 @@ export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfi
 
 // Khởi tạo Firestore với Database ID được chỉ định chính xác
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+export const VAPID_KEY =
+  "BELAxAzXVvfiNrwJFsLQfwzlRPnqXejthqKevxeE4YBhIST85NAIo014pLAe1OO8qNocpQ9dPK28W99Jq16Rey0";
+
+/**
+ * Lấy token thiết bị của người dùng để gửi thông báo qua Firebase Cloud Messaging
+ */
+export async function requestNotificationToken(): Promise<string | null> {
+  try {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      return null;
+    }
+    const supported = await isSupported().catch(() => false);
+    if (!supported) {
+      console.log("Firebase Messaging: Trình duyệt không hỗ trợ Web Push Notification.");
+      return null;
+    }
+    const messaging = getMessaging(app);
+    const currentToken = await getToken(messaging, { vapidKey: VAPID_KEY });
+    if (currentToken) {
+      console.log("Token thiết bị:", currentToken);
+      return currentToken;
+    } else {
+      console.log("Không tìm thấy token đăng ký.");
+      return null;
+    }
+  } catch (err) {
+    console.warn("Đã xảy ra lỗi khi lấy token Firebase Messaging: ", err);
+    return null;
+  }
+}
 
 export enum OperationType {
   CREATE = "create",

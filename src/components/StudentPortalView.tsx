@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   UploadCloud,
   Sparkles,
@@ -22,6 +22,7 @@ import {
   FolderOpen,
   ExternalLink,
   Image as ImageIcon,
+  Lock,
 } from "lucide-react";
 import {
   Assignment,
@@ -165,6 +166,13 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   // Khi học sinh vừa chọn tải tệp lên từ máy tính -> Hệ thống tự động lưu ngay vào Google Drive đã chia sẻ
   // theo từng mục bài tập được giao mà KHÔNG yêu cầu học sinh đăng nhập Google
   const handleFileChosenFromSystem = async (file: File) => {
+    if (hasAlreadySubmitted) {
+      setSubmitValidationError(
+        "Bài làm này em đã nộp rồi! Hệ thống đã khóa và chỉ cho phép nộp bài 1 lần duy nhất."
+      );
+      return;
+    }
+
     setUploadedFile(file);
     setSubmitValidationError(null);
     setCompletedSubmission(null);
@@ -273,12 +281,80 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   const isPracticeReady =
     selectedAssignment?.fileType !== "theory" && Boolean(uploadedFile);
 
+  // Kiểm tra xem học sinh hiện tại đã từng nộp bài cho đề kiểm tra này chưa (Chỉ cho phép nộp 1 lần duy nhất)
+  const existingSubmissionForCurrentStudent = useMemo(() => {
+    if (!currentStudent || !selectedAssignment) return null;
+    return (
+      submissions.find(
+        (s) =>
+          s.assignmentId === selectedAssignment.id &&
+          (s.studentId === currentStudent.studentCode ||
+            s.studentName.trim().toLowerCase() === currentStudent.name.trim().toLowerCase()) &&
+          (!currentClass || s.className === currentClass.name)
+      ) || null
+    );
+  }, [submissions, currentStudent, selectedAssignment, currentClass]);
+
+  // Trạng thái đã nộp bài (vừa nộp xong hoặc đã nộp trước đó) -> Khóa toàn bộ câu trả lời & chỉ cho nộp 1 lần
+  const hasAlreadySubmitted = Boolean(completedSubmission || existingSubmissionForCurrentStudent);
+  const activeSubmissionResult = completedSubmission || existingSubmissionForCurrentStudent;
+
+  // Khi chọn học sinh hoặc bài tập đã nộp trước đó, tự động phục hồi lại các câu trả lời để hiển thị khóa lại
+  useEffect(() => {
+    if (existingSubmissionForCurrentStudent && selectedAssignment) {
+      if (
+        selectedAssignment.fileType === "theory" &&
+        selectedAssignment.theoryExam &&
+        existingSubmissionForCurrentStudent.mcqDetails
+      ) {
+        const restoredMcq: Record<string, number> = {};
+        activeTheoryMcqs.forEach((q, idx) => {
+          const qKey = `${selectedAssignment.id}-mcq-${idx}-${q.id || idx}`;
+          const detail =
+            existingSubmissionForCurrentStudent.mcqDetails?.find(
+              (d) => d.questionId === q.id || d.question === q.question
+            ) || existingSubmissionForCurrentStudent.mcqDetails?.[idx];
+          if (detail && typeof detail.selectedIndex === "number" && detail.selectedIndex >= 0) {
+            restoredMcq[qKey] = detail.selectedIndex;
+          }
+        });
+        setMcqAnswers((prev) => ({ ...restoredMcq, ...prev }));
+      }
+
+      if (
+        selectedAssignment.fileType === "theory" &&
+        existingSubmissionForCurrentStudent.inspection?.type === "theory" &&
+        existingSubmissionForCurrentStudent.inspection.data?.shortAnswerDetails
+      ) {
+        const restoredEssays: Record<string, string> = {};
+        const details = existingSubmissionForCurrentStudent.inspection.data.shortAnswerDetails;
+        activeTheoryEssays.forEach((sa, sIdx) => {
+          const saKey = `${selectedAssignment.id}-sa-${sIdx}-${sa.id || sIdx}`;
+          const d = details[sIdx];
+          if (d && d.studentAnswer) {
+            restoredEssays[saKey] = d.studentAnswer;
+          }
+        });
+        setShortAnswerTexts((prev) => ({ ...restoredEssays, ...prev }));
+      }
+    }
+  }, [existingSubmissionForCurrentStudent?.id, selectedAssignment?.id]);
+
   const canSubmitWork =
-    selectedAssignment?.fileType === "theory" ? isTheoryExamComplete : isPracticeReady;
+    !hasAlreadySubmitted &&
+    (selectedAssignment?.fileType === "theory" ? isTheoryExamComplete : isPracticeReady);
 
   const handleSubmitWork = async () => {
     if (!selectedAssignment || !currentStudent || !currentClass) return;
     setSubmitValidationError(null);
+
+    // BẢO VỆ CHẶT CHẼ: Đã nộp rồi thì khóa tuyệt đối, chỉ cho nộp 1 lần duy nhất
+    if (hasAlreadySubmitted || isGrading) {
+      setSubmitValidationError(
+        "Em đã nộp bài này rồi! Hệ thống quy định mỗi học sinh chỉ được nộp bài 1 lần duy nhất để đảm bảo tính công bằng và nghiêm túc."
+      );
+      return;
+    }
 
     // KIỂM TRA BẮT BUỘC: Không cho nộp nếu chưa làm hết bài!
     if (selectedAssignment.fileType !== "theory") {
@@ -1108,6 +1184,26 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                 </div>
               </div>
 
+              {/* Thông báo khóa bài làm khi học sinh đã nộp bài */}
+              {hasAlreadySubmitted && (
+                <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl text-amber-950 flex items-start gap-3 shadow-xs">
+                  <Lock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="font-bold text-sm text-amber-900">
+                        Bài làm đã được nộp thành công &amp; đã khóa!
+                      </h4>
+                      <span className="text-[11px] bg-amber-200 text-amber-900 font-bold px-2 py-0.5 rounded-full">
+                        Chỉ cho phép nộp 1 lần duy nhất
+                      </span>
+                    </div>
+                    <p className="text-xs text-amber-800 leading-relaxed">
+                      Hệ thống quy định mỗi học sinh chỉ được nộp bài 1 lần duy nhất để đảm bảo tính công bằng và khách quan. Toàn bộ câu trả lời trắc nghiệm, bài viết tự luận và tệp bài làm của em <strong>{currentStudent.name}</strong> ({currentClass.name}) đã được hệ thống lưu trữ và khóa an toàn. Em có thể xem lại bài làm và phiếu kết quả chấm điểm chi tiết ở bên dưới.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {selectedAssignment.fileType === "theory" && selectedAssignment.theoryExam ? (
                 /* Theory Quiz & Short Answer NLP Interface — Không chọn trước đáp án, bắt buộc làm hết mới cho nộp */
                 <div className="space-y-6">
@@ -1218,20 +1314,38 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                                     <button
                                       key={displayIdx}
                                       type="button"
+                                      disabled={hasAlreadySubmitted}
                                       onClick={() => {
+                                        if (hasAlreadySubmitted) return;
                                         setMcqAnswers((prev) => ({
                                           ...prev,
                                           [qKey]: mappedOriginalIdx,
                                         }));
                                         setSubmitValidationError(null);
                                       }}
-                                      className={`p-3 rounded-xl border-2 text-left text-sm font-semibold transition-colors cursor-pointer ${
+                                      className={`p-3 rounded-xl border-2 text-left text-sm font-semibold transition-colors ${
+                                        hasAlreadySubmitted
+                                          ? "cursor-not-allowed opacity-90"
+                                          : "cursor-pointer"
+                                      } ${
                                         isThisOptionSelected
-                                          ? "border-[#0284C7] bg-sky-50 text-[#0284C7]"
+                                          ? hasAlreadySubmitted
+                                            ? "border-emerald-500 bg-emerald-50 text-emerald-800 shadow-xs"
+                                            : "border-[#0284C7] bg-sky-50 text-[#0284C7]"
+                                          : hasAlreadySubmitted
+                                          ? "border-slate-200 bg-slate-50 text-slate-500"
                                           : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                                       }`}
                                     >
-                                      {optText}
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span>{optText}</span>
+                                        {isThisOptionSelected && hasAlreadySubmitted && (
+                                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-300 shrink-0">
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                                            Đã chọn (Đã khóa)
+                                          </span>
+                                        )}
+                                      </div>
                                     </button>
                                   );
                                 })}
@@ -1318,19 +1432,34 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                                 />
                               </div>
                             )}
-                            <textarea
-                              rows={3}
-                              value={currentVal}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setShortAnswerTexts((prev) => ({ ...prev, [saKey]: val }));
-                                setSubmitValidationError(null);
-                              }}
-                              placeholder={`Em hãy tự gõ câu trả lời cho Câu tự luận ${
-                                sIdx + 1
-                              } vào ô này trước khi bấm Nộp bài nhé...`}
-                              className="w-full p-3.5 text-sm bg-white border-2 border-slate-300 rounded-xl focus:outline-none focus:border-[#0284C7]"
-                            />
+                            <div className="relative">
+                              <textarea
+                                rows={3}
+                                value={currentVal}
+                                disabled={hasAlreadySubmitted}
+                                readOnly={hasAlreadySubmitted}
+                                onChange={(e) => {
+                                  if (hasAlreadySubmitted) return;
+                                  const val = e.target.value;
+                                  setShortAnswerTexts((prev) => ({ ...prev, [saKey]: val }));
+                                  setSubmitValidationError(null);
+                                }}
+                                placeholder={`Em hãy tự gõ câu trả lời cho Câu tự luận ${
+                                  sIdx + 1
+                                } vào ô này trước khi bấm Nộp bài nhé...`}
+                                className={`w-full p-3.5 text-sm rounded-xl focus:outline-none transition-colors ${
+                                  hasAlreadySubmitted
+                                    ? "bg-slate-100 text-slate-700 border-2 border-slate-300 cursor-not-allowed select-text font-medium"
+                                    : "bg-white border-2 border-slate-300 focus:border-[#0284C7]"
+                                }`}
+                              />
+                              {hasAlreadySubmitted && (
+                                <div className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 text-[10px] font-bold text-slate-600 bg-white/90 border border-slate-300 px-2 py-0.5 rounded-md shadow-xs">
+                                  <Lock className="w-3 h-3 text-slate-500" />
+                                  <span>Đã khóa câu trả lời</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
@@ -1380,7 +1509,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                     <span className="text-sm font-bold text-slate-900">
                       Chọn tệp bài làm (.{selectedAssignment.fileType}) từ máy tính của em để nộp:
                     </span>
-                    {uploadedFile && (
+                    {uploadedFile && !hasAlreadySubmitted && (
                       <button
                         type="button"
                         onClick={() => {
@@ -1398,45 +1527,57 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
 
                   <div
                     onDragOver={(e) => {
+                      if (hasAlreadySubmitted) return;
                       e.preventDefault();
                       setIsDragging(true);
                     }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={(e) => {
+                      if (hasAlreadySubmitted) return;
                       e.preventDefault();
                       setIsDragging(false);
                       if (e.dataTransfer.files?.[0]) {
                         handleFileChosenFromSystem(e.dataTransfer.files[0]);
                       }
                     }}
-                    onClick={() => fileInputRef.current?.click()}
-                    className={`border-2 border-dashed rounded-2xl p-8 text-center transition-colors cursor-pointer ${
-                      isDragging
-                        ? "border-[#0284C7] bg-sky-50"
+                    onClick={() => {
+                      if (!hasAlreadySubmitted) fileInputRef.current?.click();
+                    }}
+                    className={`border-2 border-dashed rounded-2xl p-8 text-center transition-colors ${
+                      hasAlreadySubmitted
+                        ? "border-emerald-400 bg-emerald-50/50 cursor-not-allowed select-none"
+                        : isDragging
+                        ? "border-[#0284C7] bg-sky-50 cursor-pointer"
                         : uploadedFile
-                        ? "border-emerald-500 bg-emerald-50/40"
-                        : "border-slate-300 bg-slate-50 hover:bg-slate-100/70"
+                        ? "border-emerald-500 bg-emerald-50/40 cursor-pointer"
+                        : "border-slate-300 bg-slate-50 hover:bg-slate-100/70 cursor-pointer"
                     }`}
                   >
                     <input
                       ref={fileInputRef}
                       type="file"
+                      disabled={hasAlreadySubmitted}
                       accept=".doc,.docx,.ppt,.pptx,.sb3"
                       className="hidden"
                       onChange={(e) => {
+                        if (hasAlreadySubmitted) return;
                         if (e.target.files?.[0]) {
                           handleFileChosenFromSystem(e.target.files[0]);
                         }
                       }}
                     />
                     <div className="w-14 h-14 rounded-2xl bg-white border border-slate-200 flex items-center justify-center mx-auto mb-3 text-[#0284C7]">
-                      <UploadCloud className="w-7 h-7" />
+                      {hasAlreadySubmitted ? (
+                        <Lock className="w-7 h-7 text-emerald-600" />
+                      ) : (
+                        <UploadCloud className="w-7 h-7" />
+                      )}
                     </div>
 
                     {uploadedFile ? (
                       <div className="space-y-2">
                         <p className="text-base font-bold text-slate-900">
-                          Đã chọn tệp từ máy tính:{" "}
+                          {hasAlreadySubmitted ? "Tệp bài làm đã nộp & đã khóa: " : "Đã chọn tệp từ máy tính: "}
                           <span className="font-mono text-[#0284C7]">{uploadedFile.name}</span>{" "}
                           <span className="text-xs font-normal text-slate-500">
                             ({(uploadedFile.size / 1024).toFixed(1)} KB)
@@ -1450,9 +1591,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                             </span>
                           </div>
                         )}
-                        <p className="text-xs text-emerald-700 font-semibold">
-                          ✓ Đã sẵn sàng! Em hãy bấm nút "NỘP BÀI CHO THẦY &amp; XEM ĐIỂM NGAY" ở phía dưới.
-                        </p>
+                        {hasAlreadySubmitted ? (
+                          <p className="text-xs text-emerald-800 font-bold flex items-center justify-center gap-1.5">
+                            <Lock className="w-3.5 h-3.5 text-emerald-700" />
+                            Tệp bài làm đã được lưu an toàn và khóa lại. Không thể tải tệp mới lên.
+                          </p>
+                        ) : (
+                          <p className="text-xs text-emerald-700 font-semibold">
+                            ✓ Đã sẵn sàng! Em hãy bấm nút "NỘP BÀI CHO THẦY &amp; XEM ĐIỂM NGAY" ở phía dưới.
+                          </p>
+                        )}
                       </div>
                     ) : (
                       <div className="space-y-1.5">
@@ -1476,32 +1624,39 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                 </div>
               )}
 
-              {/* Big Friendly Submit Button — Khóa không cho nộp nếu chưa làm hết bài */}
+              {/* Big Friendly Submit Button — Khóa tuyệt đối nếu đã nộp bài (chỉ cho nộp 1 lần) hoặc chưa làm hết bài */}
               <div className="pt-2 flex flex-col items-center gap-2">
-                <button
-                  type="button"
-                  disabled={isGrading || !canSubmitWork}
-                  onClick={handleSubmitWork}
-                  className="w-full sm:w-auto min-w-[320px] py-4 px-8 bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-40 disabled:cursor-not-allowed text-white text-base font-bold rounded-2xl flex items-center justify-center gap-3 transition-colors cursor-pointer shadow-sm"
-                >
-                  {isGrading ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>{gradingStageText || "Trợ lý AI đang chấm theo Ma trận đề..."}</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-5 h-5" />
-                      <span>
-                        {selectedAssignment.fileType !== "theory" && !uploadedFile
-                          ? `VUI LÒNG CHỌN TỆP .${selectedAssignment.fileType.toUpperCase()} TỪ MÁY TÍNH ĐỂ NỘP`
-                          : selectedAssignment.fileType === "theory" && !isTheoryExamComplete
-                          ? "VUI LÒNG LÀM HẾT TẤT CẢ CÁC CÂU HỎI ĐỂ NỘP BÀI"
-                          : "NỘP BÀI CHO THẦY & XEM KẾT QUẢ NGAY!"}
-                      </span>
-                    </>
-                  )}
-                </button>
+                {hasAlreadySubmitted ? (
+                  <div className="w-full sm:w-auto min-w-[340px] py-4 px-8 bg-slate-100 border-2 border-slate-300 text-slate-700 text-base font-bold rounded-2xl flex items-center justify-center gap-3 cursor-not-allowed select-none shadow-xs">
+                    <Lock className="w-5 h-5 text-slate-500" />
+                    <span>BÀI LÀM ĐÃ NỘP &amp; ĐÃ KHÓA (CHỈ ĐƯỢC PHÉP NỘP 1 LẦN)</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isGrading || !canSubmitWork || hasAlreadySubmitted}
+                    onClick={handleSubmitWork}
+                    className="w-full sm:w-auto min-w-[320px] py-4 px-8 bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-40 disabled:cursor-not-allowed text-white text-base font-bold rounded-2xl flex items-center justify-center gap-3 transition-colors cursor-pointer shadow-sm"
+                  >
+                    {isGrading ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        <span>{gradingStageText || "Trợ lý AI đang chấm theo Ma trận đề..."}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-5 h-5" />
+                        <span>
+                          {selectedAssignment.fileType !== "theory" && !uploadedFile
+                            ? `VUI LÒNG CHỌN TỆP .${selectedAssignment.fileType.toUpperCase()} TỪ MÁY TÍNH ĐỂ NỘP`
+                            : selectedAssignment.fileType === "theory" && !isTheoryExamComplete
+                            ? "VUI LÒNG LÀM HẾT TẤT CẢ CÁC CÂU HỎI ĐỂ NỘP BÀI"
+                            : "NỘP BÀI CHO THẦY & XEM KẾT QUẢ NGAY!"}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           )}
