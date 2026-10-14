@@ -7,10 +7,16 @@ import {
   getDocs,
   writeBatch,
 } from "firebase/firestore";
-import { db, handleFirestoreError, OperationType } from "../firebase";
+import {
+  db,
+  handleFirestoreError,
+  OperationType,
+  sanitizeForFirestore,
+} from "../firebase";
 import { Assignment, StudentSubmission } from "../types/grading";
 import { ClassRoom } from "../components/ClassManagerView";
 import { SystemCodeStatePayload } from "../utils/codeSyncEngine";
+import { sendSyncBroadcast } from "../utils/broadcastSync";
 
 const ASSIGNMENTS_COLLECTION = "assignments";
 const CLASSES_COLLECTION = "classes";
@@ -118,62 +124,83 @@ export function subscribeSystemState(
 }
 
 /**
- * Lưu 1 đề kiểm tra / bài tập lên Firestore
+ * Lưu 1 đề kiểm tra / bài tập lên Firestore & phát xung đồng bộ đa tab
  */
 export async function saveAssignmentToFirestore(assignment: Assignment): Promise<void> {
-  const path = `${ASSIGNMENTS_COLLECTION}/${assignment.id}`;
+  const clean = sanitizeForFirestore(assignment);
+  const path = `${ASSIGNMENTS_COLLECTION}/${clean.id}`;
   try {
-    await setDoc(doc(db, ASSIGNMENTS_COLLECTION, assignment.id), assignment);
+    await setDoc(doc(db, ASSIGNMENTS_COLLECTION, clean.id), clean);
+    sendSyncBroadcast("ADD_ASSIGNMENT", clean);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 /**
- * Xóa 1 đề kiểm tra khỏi Firestore
+ * Xóa 1 đề kiểm tra khỏi Firestore & phát xung đồng bộ đa tab
  */
 export async function deleteAssignmentFromFirestore(id: string): Promise<void> {
   const path = `${ASSIGNMENTS_COLLECTION}/${id}`;
   try {
     await deleteDoc(doc(db, ASSIGNMENTS_COLLECTION, id));
+    sendSyncBroadcast("DELETE_ASSIGNMENT", { id });
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
 /**
- * Lưu 1 bài nộp của học sinh lên Firestore
+ * Lưu 1 bài nộp của học sinh lên Firestore & phát xung đồng bộ đa tab
  */
 export async function saveSubmissionToFirestore(submission: StudentSubmission): Promise<void> {
-  const path = `${SUBMISSIONS_COLLECTION}/${submission.id}`;
+  const clean = sanitizeForFirestore(submission);
+  const path = `${SUBMISSIONS_COLLECTION}/${clean.id}`;
   try {
-    await setDoc(doc(db, SUBMISSIONS_COLLECTION, submission.id), submission);
+    await setDoc(doc(db, SUBMISSIONS_COLLECTION, clean.id), clean);
+    sendSyncBroadcast("NEW_SUBMISSION", clean);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
 }
 
 /**
- * Xóa 1 bài nộp khỏi Firestore
+ * Xóa 1 bài nộp khỏi Firestore & phát xung đồng bộ đa tab
  */
 export async function deleteSubmissionFromFirestore(id: string): Promise<void> {
   const path = `${SUBMISSIONS_COLLECTION}/${id}`;
   try {
     await deleteDoc(doc(db, SUBMISSIONS_COLLECTION, id));
+    sendSyncBroadcast("DELETE_SUBMISSION", { id });
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
 /**
- * Lưu 1 lớp học lên Firestore
+ * Lưu 1 lớp học lên Firestore & phát xung đồng bộ đa tab
  */
 export async function saveClassToFirestore(classroom: ClassRoom): Promise<void> {
-  const path = `${CLASSES_COLLECTION}/${classroom.id}`;
+  const clean = sanitizeForFirestore(classroom);
+  const path = `${CLASSES_COLLECTION}/${clean.id}`;
   try {
-    await setDoc(doc(db, CLASSES_COLLECTION, classroom.id), classroom);
+    await setDoc(doc(db, CLASSES_COLLECTION, clean.id), clean);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+/**
+ * Lưu danh sách lớp học lên Firestore
+ */
+export async function saveClassesToFirestore(classes: ClassRoom[]): Promise<void> {
+  try {
+    for (const c of classes) {
+      await saveClassToFirestore(c);
+    }
+    sendSyncBroadcast("UPDATE_CLASSES", classes);
+  } catch (err) {
+    console.warn("Lỗi lưu danh sách lớp học lên Firestore:", err);
   }
 }
 
@@ -193,12 +220,13 @@ export async function deleteClassFromFirestore(id: string): Promise<void> {
  * Lưu trạng thái nháp và lịch sử hoạt động lên Firestore
  */
 export async function saveSystemStateToFirestore(state: any): Promise<void> {
+  const clean = sanitizeForFirestore(state);
   const path = `${SYSTEM_STATE_COLLECTION}/${SYSTEM_STATE_DOC_ID}`;
   try {
     await setDoc(
       doc(db, SYSTEM_STATE_COLLECTION, SYSTEM_STATE_DOC_ID),
       {
-        ...state,
+        ...clean,
         updatedAt: new Date().toISOString(),
       },
       { merge: true }
@@ -215,11 +243,12 @@ export async function syncEntireStateToFirestore(
   payload: SystemCodeStatePayload
 ): Promise<void> {
   try {
+    const cleanPayload = sanitizeForFirestore(payload);
     const batch = writeBatch(db);
 
     // Đồng bộ đề thi
-    if (Array.isArray(payload.assignments)) {
-      for (const asg of payload.assignments) {
+    if (Array.isArray(cleanPayload.assignments)) {
+      for (const asg of cleanPayload.assignments) {
         if (asg && asg.id) {
           batch.set(doc(db, ASSIGNMENTS_COLLECTION, asg.id), asg);
         }
@@ -227,8 +256,8 @@ export async function syncEntireStateToFirestore(
     }
 
     // Đồng bộ lớp học
-    if (Array.isArray(payload.classes)) {
-      for (const cls of payload.classes) {
+    if (Array.isArray(cleanPayload.classes)) {
+      for (const cls of cleanPayload.classes) {
         if (cls && cls.id) {
           batch.set(doc(db, CLASSES_COLLECTION, cls.id), cls);
         }
@@ -236,8 +265,8 @@ export async function syncEntireStateToFirestore(
     }
 
     // Đồng bộ bài nộp
-    if (Array.isArray(payload.submissions)) {
-      for (const sub of payload.submissions) {
+    if (Array.isArray(cleanPayload.submissions)) {
+      for (const sub of cleanPayload.submissions) {
         if (sub && sub.id) {
           batch.set(doc(db, SUBMISSIONS_COLLECTION, sub.id), sub);
         }
@@ -245,14 +274,14 @@ export async function syncEntireStateToFirestore(
     }
 
     // Xử lý các mục đã xóa
-    if (payload.deletedIds) {
-      for (const id of payload.deletedIds.assignments || []) {
+    if (cleanPayload.deletedIds) {
+      for (const id of cleanPayload.deletedIds.assignments || []) {
         batch.delete(doc(db, ASSIGNMENTS_COLLECTION, id));
       }
-      for (const id of payload.deletedIds.classes || []) {
+      for (const id of cleanPayload.deletedIds.classes || []) {
         batch.delete(doc(db, CLASSES_COLLECTION, id));
       }
-      for (const id of payload.deletedIds.submissions || []) {
+      for (const id of cleanPayload.deletedIds.submissions || []) {
         batch.delete(doc(db, SUBMISSIONS_COLLECTION, id));
       }
     }
@@ -261,10 +290,10 @@ export async function syncEntireStateToFirestore(
     batch.set(
       doc(db, SYSTEM_STATE_COLLECTION, SYSTEM_STATE_DOC_ID),
       {
-        examBuilderDraft: payload.examBuilderDraft ?? null,
-        tt27RegularRecords: payload.tt27RegularRecords ?? {},
-        tt27PeriodicRecords: payload.tt27PeriodicRecords ?? {},
-        operationHistory: payload.operationHistory ?? [],
+        examBuilderDraft: cleanPayload.examBuilderDraft ?? null,
+        tt27RegularRecords: cleanPayload.tt27RegularRecords ?? {},
+        tt27PeriodicRecords: cleanPayload.tt27PeriodicRecords ?? {},
+        operationHistory: cleanPayload.operationHistory ?? [],
         lastUpdatedAt: new Date().toLocaleString("vi-VN"),
       },
       { merge: true }
@@ -291,13 +320,16 @@ export async function seedInitialFirestoreDataIfEmpty(
       const batch = writeBatch(db);
 
       for (const cls of initialClasses) {
-        batch.set(doc(db, CLASSES_COLLECTION, cls.id), cls);
+        const c = sanitizeForFirestore(cls);
+        batch.set(doc(db, CLASSES_COLLECTION, c.id), c);
       }
       for (const asg of initialAssignments) {
-        batch.set(doc(db, ASSIGNMENTS_COLLECTION, asg.id), asg);
+        const a = sanitizeForFirestore(asg);
+        batch.set(doc(db, ASSIGNMENTS_COLLECTION, a.id), a);
       }
       for (const sub of initialSubmissions) {
-        batch.set(doc(db, SUBMISSIONS_COLLECTION, sub.id), sub);
+        const s = sanitizeForFirestore(sub);
+        batch.set(doc(db, SUBMISSIONS_COLLECTION, s.id), s);
       }
 
       await batch.commit();

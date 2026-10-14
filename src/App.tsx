@@ -24,6 +24,7 @@ import {
   Upload,
   X,
   Clock,
+  FolderSync,
 } from "lucide-react";
 import {
   INITIAL_ASSIGNMENTS,
@@ -58,6 +59,8 @@ import { StudentPortalView } from "./components/StudentPortalView";
 import { ClassAnalyticsView } from "./components/ClassAnalyticsView";
 import { ClassManagerView, INITIAL_CLASSES, ClassRoom } from "./components/ClassManagerView";
 import { Circular27AssessmentView } from "./components/Circular27AssessmentView";
+import { GoogleDriveSyncModal } from "./components/GoogleDriveSyncModal";
+import { initAuth } from "./utils/googleDriveService";
 import {
   subscribeAssignments,
   subscribeClasses,
@@ -65,9 +68,12 @@ import {
   subscribeSystemState,
   seedInitialFirestoreDataIfEmpty,
   saveSubmissionToFirestore,
+  saveAssignmentToFirestore,
+  saveClassesToFirestore,
   deleteSubmissionFromFirestore,
   deleteAssignmentFromFirestore,
 } from "./services/firebaseService";
+import { subscribeSyncBroadcast } from "./utils/broadcastSync";
 
 type ActiveTab =
   | "dashboard"
@@ -117,6 +123,56 @@ export default function App() {
   const [showHistorySyncModal, setShowHistorySyncModal] = useState<boolean>(false);
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [syncModalNotice, setSyncModalNotice] = useState<string>("");
+
+  // Quản lý Trạng thái & Hộp thoại Đồng bộ Google Drive (0đ chi phí)
+  const [showGoogleDriveModal, setShowGoogleDriveModal] = useState<boolean>(false);
+  const [googleDriveConnected, setGoogleDriveConnected] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubDrive = initAuth(
+      () => setGoogleDriveConnected(true),
+      () => setGoogleDriveConnected(false)
+    );
+    return () => {
+      unsubDrive();
+    };
+  }, []);
+
+  const handleRestoreFromGoogleDrive = async (importedState: any) => {
+    if (!importedState || typeof importedState !== "object") return;
+
+    const nextClasses =
+      Array.isArray(importedState.classes) && importedState.classes.length > 0
+        ? mergeArrayById(importedState.classes, classesList, [])
+        : classesList;
+    const nextAssignments = Array.isArray(importedState.assignments)
+      ? mergeArrayById(importedState.assignments, assignments, [])
+      : assignments;
+    const nextSubmissions = Array.isArray(importedState.submissions)
+      ? mergeArrayById(importedState.submissions, submissions, [])
+      : submissions;
+    const nextHistory = Array.isArray(importedState.operationHistory)
+      ? mergeArrayById(importedState.operationHistory, operationHistory, [])
+      : operationHistory;
+
+    setClassesList(nextClasses);
+    setAssignments(nextAssignments);
+    setSubmissions(nextSubmissions);
+    setOperationHistory(nextHistory);
+
+    const res = await syncStateToCodebase({
+      classes: nextClasses,
+      assignments: nextAssignments,
+      submissions: nextSubmissions,
+      tt27RegularRecords: importedState.tt27RegularRecords,
+      tt27PeriodicRecords: importedState.tt27PeriodicRecords,
+      operationHistory: nextHistory,
+      examBuilderDraft: importedState.examBuilderDraft,
+      actionLabel: "Khôi phục toàn bộ dữ liệu từ Google Drive chia sẻ",
+      actionCategory: "sync",
+    });
+    applySyncResult(res);
+  };
 
   const applySyncResult = (res: {
     ok: boolean;
@@ -184,11 +240,37 @@ export default function App() {
       }
     });
 
+    // Lắng nghe kênh BroadcastChannel Realtime siêu tốc tức thì giữa các tab/cửa sổ
+    const unsubBroadcast = subscribeSyncBroadcast((msg) => {
+      if (msg.type === "NEW_SUBMISSION" && msg.payload) {
+        setSubmissions((prev) => {
+          const exists = prev.some((s) => s.id === msg.payload.id);
+          return exists
+            ? prev.map((s) => (s.id === msg.payload.id ? msg.payload : s))
+            : [msg.payload, ...prev];
+        });
+      } else if (msg.type === "DELETE_SUBMISSION" && msg.payload?.id) {
+        setSubmissions((prev) => prev.filter((s) => s.id !== msg.payload.id));
+      } else if (msg.type === "ADD_ASSIGNMENT" && msg.payload) {
+        setAssignments((prev) => {
+          const exists = prev.some((a) => a.id === msg.payload.id);
+          return exists
+            ? prev.map((a) => (a.id === msg.payload.id ? msg.payload : a))
+            : [msg.payload, ...prev];
+        });
+      } else if (msg.type === "DELETE_ASSIGNMENT" && msg.payload?.id) {
+        setAssignments((prev) => prev.filter((a) => a.id !== msg.payload.id));
+      } else if (msg.type === "UPDATE_CLASSES" && Array.isArray(msg.payload)) {
+        setClassesList(msg.payload);
+      }
+    });
+
     return () => {
       unsubAssignments();
       unsubClasses();
       unsubSubmissions();
       unsubSystemState();
+      unsubBroadcast();
     };
   }, []);
 
@@ -363,6 +445,9 @@ export default function App() {
   };
 
   const handleAddAssignment = (newAsg: Assignment) => {
+    saveAssignmentToFirestore(newAsg).catch((err) => {
+      console.warn("Lưu đề thi lên Firestore:", err);
+    });
     setAssignments((prev) => {
       const exists = prev.some((a) => a.id === newAsg.id);
       const next = exists
@@ -395,7 +480,9 @@ export default function App() {
   };
 
   const handleNewStudentSubmission = (newSub: StudentSubmission) => {
-    saveSubmissionToFirestore(newSub).catch(() => {});
+    saveSubmissionToFirestore(newSub).catch((err) => {
+      console.warn("Lưu bài nộp lên Firestore:", err);
+    });
     setSubmissions((prev) => {
       const exists = prev.some((s) => s.id === newSub.id);
       const next = exists
@@ -412,6 +499,9 @@ export default function App() {
 
   const handleUpdateClassesAndSync = (updatedClasses: ClassRoom[]) => {
     setClassesList(updatedClasses);
+    saveClassesToFirestore(updatedClasses).catch((err) => {
+      console.warn("Lưu danh sách lớp lên Firestore:", err);
+    });
     const totalStudents = updatedClasses.reduce(
       (sum, c) => sum + (c.students?.length || 0),
       0
@@ -699,6 +789,23 @@ export default function App() {
         <div className="flex items-center gap-2.5 shrink-0 relative">
           {activeTab !== "student_portal" ? (
             <>
+              <button
+                type="button"
+                onClick={() => setShowGoogleDriveModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-[#0B6699] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+                title="Đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh vào Google Drive chia sẻ (0đ)"
+              >
+                <FolderSync className="w-3.5 h-3.5 text-[#0284C7]" />
+                <span>Google Drive</span>
+                {googleDriveConnected ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Đã kết nối
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-slate-500 font-mono">0đ</span>
+                )}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1288,7 +1395,16 @@ export default function App() {
                               <div className="text-slate-500 flex items-center gap-1.5 mt-0.5">
                                 <span>{sub.className}</span>
                                 <span>·</span>
-                                <span className="font-mono">{sub.submittedAt}</span>
+                                <span className="font-mono">
+                                  {sub.submittedAt?.includes("T")
+                                    ? new Date(sub.submittedAt).toLocaleString("vi-VN", {
+                                        hour: "2-digit",
+                                        minute: "2-digit",
+                                        day: "2-digit",
+                                        month: "2-digit",
+                                      })
+                                    : sub.submittedAt}
+                                </span>
                               </div>
                               {sub.needsAttention && (
                                 <div className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-bold text-red-700">
@@ -1648,6 +1764,37 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Thẻ Đồng bộ Đám mây Google Drive (0đ Phí) */}
+              <div className="bg-gradient-to-r from-blue-50 to-emerald-50 border border-blue-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-white border border-blue-200 flex items-center justify-center text-[#0284C7] shadow-xs shrink-0">
+                    <FolderSync className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-900">
+                        Đồng bộ Đám mây Google Drive (Thư mục chia sẻ)
+                      </span>
+                      <span className="px-2 py-0.5 text-[10px] font-bold text-emerald-800 bg-emerald-100 rounded-full border border-emerald-300">
+                        0đ Phí · Miễn phí 100%
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      Tự động lưu lớp học, ngân hàng đề, bài nộp học sinh và nhận xét TT27 vào thư mục ID: <code className="font-mono text-slate-800 font-semibold bg-white/70 px-1 py-0.5 rounded">15Kvyh1bnEtp2iJ7IPac7GYBV4_M-kN14</code>.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowGoogleDriveModal(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg transition-colors cursor-pointer shrink-0 shadow-xs"
+                >
+                  <FolderSync className="w-3.5 h-3.5" />
+                  <span>Quản lý Đồng bộ Google Drive</span>
+                </button>
+              </div>
+
               {/* Thanh công cụ Đồng bộ & Sao lưu */}
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="space-y-0.5">
@@ -1804,6 +1951,24 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Modal Quản lý Đồng bộ Google Drive (0đ Phí) */}
+      <GoogleDriveSyncModal
+        isOpen={showGoogleDriveModal}
+        onClose={() => setShowGoogleDriveModal(false)}
+        onRestoreState={handleRestoreFromGoogleDrive}
+        currentStateStats={{
+          classesCount: classesList.length,
+          studentsCount: classesList.reduce(
+            (sum, c) => sum + (c.students?.length || 0),
+            0
+          ),
+          assignmentsCount: assignments.length,
+          submissionsCount: submissions.length,
+          regularRecordsCount: Object.keys(initialCached?.tt27RegularRecords || {}).length,
+          periodicRecordsCount: Object.keys(initialCached?.tt27PeriodicRecords || {}).length,
+        }}
+      />
 
       {/* System Footer */}
       <footer className="bg-white border-t border-slate-200 py-5 px-6 mt-12">

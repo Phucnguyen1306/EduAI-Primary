@@ -347,6 +347,11 @@ async function startServer() {
 
       writeStateToInitialDataTs();
 
+      // Tự động sao lưu và đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh vào Google Drive chia sẻ
+      syncSystemStateFilesToGoogleDrive(liveSystemState).catch((err) => {
+        console.warn("Auto sync to Google Drive mirror warning:", err?.message || err);
+      });
+
       res.json({
         ok: true,
         lastUpdatedAt: liveSystemState.lastUpdatedAt,
@@ -1085,10 +1090,211 @@ QUY TẮC CHẤM ĐIỂM NGHIÊM NGẶT (TUYỆT ĐỐI KHÔNG ĐƯỢC BỊA Đ
     const { accessToken } = req.body || {};
     if (typeof accessToken === "string" && accessToken.trim()) {
       serverTeacherDriveToken = accessToken.trim();
+      // Đồng bộ ngay toàn bộ dữ liệu thao tác của Giáo viên và Học sinh lên đám mây
+      syncSystemStateFilesToGoogleDrive(liveSystemState, serverTeacherDriveToken).catch(() => {});
       return res.json({ ok: true });
     }
     return res.status(400).json({ ok: false });
   });
+
+  // Hàm đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh vào Google Drive chia sẻ
+  async function syncSystemStateFilesToGoogleDrive(
+    state: typeof liveSystemState,
+    overrideToken?: string
+  ): Promise<{
+    ok: boolean;
+    syncedToCloud: boolean;
+    cloudFolderId?: string;
+    cloudFolderUrl?: string;
+    filesSynced: string[];
+    lastSyncedAt: string;
+    errorMessage?: string;
+  }> {
+    const syncFolderName = "[00_Du_Lieu_Dong_Bo_He_Thong]";
+    const targetSubfolderPath = path.join(LOCAL_SHARED_DRIVE_DIR, syncFolderName);
+    fs.mkdirSync(targetSubfolderPath, { recursive: true });
+
+    const fullStateJson = JSON.stringify(
+      {
+        lastUpdated: state.lastUpdatedAt,
+        epoch: state.lastUpdatedEpoch,
+        classes: state.classes,
+        assignments: state.assignments,
+        submissions: state.submissions,
+        tt27RegularRecords: state.tt27RegularRecords,
+        tt27PeriodicRecords: state.tt27PeriodicRecords,
+        operationHistory: state.operationHistory,
+        examBuilderDraft: state.examBuilderDraft,
+        deletedIds: state.deletedIds,
+      },
+      null,
+      2
+    );
+
+    const classesJson = JSON.stringify(state.classes, null, 2);
+    const assignmentsJson = JSON.stringify(state.assignments, null, 2);
+    const submissionsJson = JSON.stringify(state.submissions, null, 2);
+    const tt27Json = JSON.stringify(
+      {
+        regular: state.tt27RegularRecords,
+        periodic: state.tt27PeriodicRecords,
+      },
+      null,
+      2
+    );
+
+    // Ghi các tệp sao lưu vào mirror cục bộ ánh xạ 1-1 với thư mục Google Drive
+    fs.writeFileSync(path.join(targetSubfolderPath, "eduai_toan_bo_du_lieu_he_thong.json"), fullStateJson, "utf-8");
+    fs.writeFileSync(path.join(targetSubfolderPath, "eduai_danh_sach_lop_hoc_sinh.json"), classesJson, "utf-8");
+    fs.writeFileSync(path.join(targetSubfolderPath, "eduai_danh_sach_bai_tap_de_kiem_tra.json"), assignmentsJson, "utf-8");
+    fs.writeFileSync(path.join(targetSubfolderPath, "eduai_ket_qua_nop_bai_hoc_sinh.json"), submissionsJson, "utf-8");
+    fs.writeFileSync(path.join(targetSubfolderPath, "eduai_nhan_xet_thong_tu_27.json"), tt27Json, "utf-8");
+
+    const filesSynced = [
+      "eduai_toan_bo_du_lieu_he_thong.json",
+      "eduai_danh_sach_lop_hoc_sinh.json",
+      "eduai_danh_sach_bai_tap_de_kiem_tra.json",
+      "eduai_ket_qua_nop_bai_hoc_sinh.json",
+      "eduai_nhan_xet_thong_tu_27.json",
+    ];
+
+    const activeToken = overrideToken || serverTeacherDriveToken;
+    let syncedToCloud = false;
+    let cloudFolderId: string | undefined;
+    let cloudFolderUrl: string | undefined;
+
+    if (activeToken) {
+      try {
+        const escapedName = syncFolderName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const q = `mimeType = 'application/vnd.google-apps.folder' and name = '${escapedName}' and '${SHARED_DRIVE_ROOT_ID}' in parents and trashed = false`;
+        const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+          q
+        )}&fields=files(id,name,webViewLink)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+        const searchRes = await fetch(searchUrl, {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        });
+
+        if (searchRes.ok) {
+          const searchData: any = await searchRes.json();
+          if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+            cloudFolderId = searchData.files[0].id;
+            cloudFolderUrl =
+              searchData.files[0].webViewLink ||
+              `https://drive.google.com/drive/folders/${cloudFolderId}`;
+          }
+        }
+
+        if (!cloudFolderId) {
+          const createRes = await fetch(
+            "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,webViewLink",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${activeToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                name: syncFolderName,
+                mimeType: "application/vnd.google-apps.folder",
+                parents: [SHARED_DRIVE_ROOT_ID],
+                description: "Thư mục đồng bộ toàn bộ dữ liệu thao tác của Giáo viên và bài làm của Học sinh",
+              }),
+            }
+          );
+          if (createRes.ok) {
+            const created: any = await createRes.json();
+            cloudFolderId = created.id;
+            cloudFolderUrl =
+              created.webViewLink ||
+              `https://drive.google.com/drive/folders/${cloudFolderId}`;
+          }
+        }
+
+        if (cloudFolderId) {
+          const uploadOrUpdateJsonFile = async (fileName: string, jsonContent: string) => {
+            const fileSearchQ = `name = '${fileName}' and '${cloudFolderId}' in parents and trashed = false`;
+            const fileSearchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+              fileSearchQ
+            )}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+            const existingRes = await fetch(fileSearchUrl, {
+              headers: { Authorization: `Bearer ${activeToken}` },
+            });
+
+            let existingFileId: string | null = null;
+            if (existingRes.ok) {
+              const data: any = await existingRes.json();
+              if (Array.isArray(data.files) && data.files.length > 0) {
+                existingFileId = data.files[0].id;
+              }
+            }
+
+            if (existingFileId) {
+              await fetch(
+                `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=media&supportsAllDrives=true`,
+                {
+                  method: "PATCH",
+                  headers: {
+                    Authorization: `Bearer ${activeToken}`,
+                    "Content-Type": "application/json; charset=utf-8",
+                  },
+                  body: jsonContent,
+                }
+              );
+            } else {
+              const boundary = "-------eduai-sync-boundary-314";
+              const metadata = {
+                name: fileName,
+                parents: [cloudFolderId],
+                mimeType: "application/json",
+              };
+              const multipartBody = Buffer.concat([
+                Buffer.from(
+                  `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(
+                    metadata
+                  )}\r\n--${boundary}\r\nContent-Type: application/json; charset=utf-8\r\n\r\n`,
+                  "utf-8"
+                ),
+                Buffer.from(jsonContent, "utf-8"),
+                Buffer.from(`\r\n--${boundary}--`, "utf-8"),
+              ]);
+
+              await fetch(
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name",
+                {
+                  method: "POST",
+                  headers: {
+                    Authorization: `Bearer ${activeToken}`,
+                    "Content-Type": `multipart/related; boundary=${boundary}`,
+                  },
+                  body: multipartBody,
+                }
+              );
+            }
+          };
+
+          await uploadOrUpdateJsonFile("eduai_toan_bo_du_lieu_he_thong.json", fullStateJson);
+          await uploadOrUpdateJsonFile("eduai_danh_sach_lop_hoc_sinh.json", classesJson);
+          await uploadOrUpdateJsonFile("eduai_danh_sach_bai_tap_de_kiem_tra.json", assignmentsJson);
+          await uploadOrUpdateJsonFile("eduai_ket_qua_nop_bai_hoc_sinh.json", submissionsJson);
+          await uploadOrUpdateJsonFile("eduai_nhan_xet_thong_tu_27.json", tt27Json);
+          syncedToCloud = true;
+        }
+      } catch (cloudErr: any) {
+        console.warn("Cloud Drive system sync warning:", cloudErr?.message || cloudErr);
+      }
+    }
+
+    return {
+      ok: true,
+      syncedToCloud,
+      cloudFolderId: cloudFolderId || SHARED_DRIVE_ROOT_ID,
+      cloudFolderUrl: cloudFolderUrl || SHARED_DRIVE_ROOT_URL,
+      filesSynced,
+      lastSyncedAt: state.lastUpdatedAt,
+    };
+  }
 
   app.post("/api/drive/auto-save", async (req, res) => {
     try {
@@ -1249,7 +1455,148 @@ QUY TẮC CHẤM ĐIỂM NGHIÊM NGẶT (TUYỆT ĐỐI KHÔNG ĐƯỢC BỊA Đ
     }
   });
 
-  // 5. AI Phân tích & Đánh giá Học sinh Tiểu học chính xác theo Thông tư 27/2020/TT-BGDĐT của Bộ GD&ĐT
+  // Lấy trạng thái kết nối Google Drive và thông tin thư mục chia sẻ
+  app.get("/api/drive/status", (_req, res) => {
+    const syncFolderName = "[00_Du_Lieu_Dong_Bo_He_Thong]";
+    const targetSubfolderPath = path.join(LOCAL_SHARED_DRIVE_DIR, syncFolderName);
+    const fullStateFile = path.join(targetSubfolderPath, "eduai_toan_bo_du_lieu_he_thong.json");
+    const hasLocalMirror = fs.existsSync(fullStateFile);
+
+    res.json({
+      ok: true,
+      folderId: SHARED_DRIVE_ROOT_ID,
+      folderUrl: SHARED_DRIVE_ROOT_URL,
+      isConnectedToGoogle: Boolean(serverTeacherDriveToken),
+      hasLocalMirror,
+      lastUpdatedAt: liveSystemState.lastUpdatedAt,
+      stats: {
+        classesCount: liveSystemState.classes.length,
+        assignmentsCount: liveSystemState.assignments.length,
+        submissionsCount: liveSystemState.submissions.length,
+        regularRecordsCount: Object.keys(liveSystemState.tt27RegularRecords).length,
+        periodicRecordsCount: Object.keys(liveSystemState.tt27PeriodicRecords).length,
+      },
+    });
+  });
+
+  // Kích hoạt đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh lên Google Drive
+  app.post("/api/drive/sync-system-state", async (req, res) => {
+    try {
+      const { clientAccessToken, statePayload } = req.body || {};
+      const activeToken = clientAccessToken || serverTeacherDriveToken;
+
+      if (clientAccessToken && typeof clientAccessToken === "string") {
+        serverTeacherDriveToken = clientAccessToken.trim();
+      }
+
+      const targetState = statePayload && typeof statePayload === "object"
+        ? {
+            ...liveSystemState,
+            ...statePayload,
+          }
+        : liveSystemState;
+
+      const result = await syncSystemStateFilesToGoogleDrive(targetState, activeToken);
+
+      res.json({
+        ...result,
+        message: result.syncedToCloud
+          ? "Đã đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh trực tiếp lên thư mục Google Drive đã chia sẻ thành công!"
+          : "Đã lưu bản sao lưu hệ thống vào mirror Google Drive cục bộ. Hãy kết nối tài khoản Google để tải thẳng lên đám mây Google Drive!",
+      });
+    } catch (err: any) {
+      console.error("Error in /api/drive/sync-system-state:", err);
+      res.status(500).json({
+        ok: false,
+        error: err?.message || "Lỗi khi đồng bộ dữ liệu hệ thống lên Google Drive.",
+      });
+    }
+  });
+
+  // Khôi phục / Đọc toàn bộ dữ liệu hệ thống đã lưu từ Google Drive (hoặc mirror)
+  app.get("/api/drive/pull-system-state", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith("Bearer ")
+        ? authHeader.slice(7).trim()
+        : null;
+      const activeToken = bearerToken || serverTeacherDriveToken;
+
+      const syncFolderName = "[00_Du_Lieu_Dong_Bo_He_Thong]";
+      const targetSubfolderPath = path.join(LOCAL_SHARED_DRIVE_DIR, syncFolderName);
+      const fullStateFile = path.join(targetSubfolderPath, "eduai_toan_bo_du_lieu_he_thong.json");
+
+      let cloudData: any = null;
+
+      if (activeToken) {
+        try {
+          const escapedName = syncFolderName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const folderQ = `mimeType = 'application/vnd.google-apps.folder' and name = '${escapedName}' and '${SHARED_DRIVE_ROOT_ID}' in parents and trashed = false`;
+          const folderUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+            folderQ
+          )}&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+          const folderRes = await fetch(folderUrl, {
+            headers: { Authorization: `Bearer ${activeToken}` },
+          });
+
+          if (folderRes.ok) {
+            const folderJson: any = await folderRes.json();
+            const cloudFolderId = folderJson.files?.[0]?.id;
+            if (cloudFolderId) {
+              const fileQ = `name = 'eduai_toan_bo_du_lieu_he_thong.json' and '${cloudFolderId}' in parents and trashed = false`;
+              const fileUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+                fileQ
+              )}&fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+              const fileRes = await fetch(fileUrl, {
+                headers: { Authorization: `Bearer ${activeToken}` },
+              });
+              if (fileRes.ok) {
+                const fileJson: any = await fileRes.json();
+                const fileId = fileJson.files?.[0]?.id;
+                if (fileId) {
+                  const downloadRes = await fetch(
+                    `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`,
+                    { headers: { Authorization: `Bearer ${activeToken}` } }
+                  );
+                  if (downloadRes.ok) {
+                    cloudData = await downloadRes.json();
+                  }
+                }
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Pulling state from cloud Drive warning:", fetchErr);
+        }
+      }
+
+      if (!cloudData && fs.existsSync(fullStateFile)) {
+        try {
+          const raw = fs.readFileSync(fullStateFile, "utf-8");
+          cloudData = JSON.parse(raw);
+        } catch {}
+      }
+
+      if (cloudData) {
+        return res.json({
+          ok: true,
+          source: activeToken ? "google_drive" : "local_mirror",
+          state: cloudData,
+        });
+      }
+
+      res.status(404).json({
+        ok: false,
+        error: "Chưa tìm thấy tệp sao lưu dữ liệu hệ thống trong thư mục Google Drive.",
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        ok: false,
+        error: err?.message || "Không thể tải dữ liệu từ Google Drive.",
+      });
+    }
+  });
   app.post("/api/ai/evaluate-tt27", async (req, res) => {
     try {
       const {
@@ -1265,7 +1612,12 @@ QUY TẮC CHẤM ĐIỂM NGHIÊM NGẶT (TUYỆT ĐỐI KHÔNG ĐƯỢC BỊA Đ
 Dưới đây là danh sách học sinh kèm kết quả bài kiểm tra hàng tháng / bài thực hành trong tháng:
 ${JSON.stringify(studentsData, null, 2)}
 
-Hãy phân tích từng học sinh và sinh nhận xét ĐÁNH GIÁ THƯỜNG XUYÊN chính xác theo Thông tư 27 gồm 4 nhóm tiêu chí (mỗi nhóm có Mã nhận xét ngắn gọn và Nội dung nhận xét cụ thể, ấm áp, đúng chuẩn hồ sơ học bạ điện tử / vnEdu):
+NGUYÊN TẮC BẮT BUỘC:
+- Tuyệt đối KHÔNG tự bịa ra kết quả, điểm số hay nhận xét cho bất kỳ học sinh nào chưa làm bài kiểm tra hoặc không có điểm bài làm (monthlyScore là null hoặc không có bài thi).
+- Nếu học sinh nào không có dữ liệu bài kiểm tra thực tế, toàn bộ nội dung nhận xét và mã nhận xét của học sinh đó phải để chuỗi rỗng ("").
+- Chỉ phân tích và sinh nhận xét cho những học sinh THỰC TẾ ĐÃ LÀM BÀI VÀ CÓ ĐIỂM SỐ!
+
+Đối với học sinh đã làm bài, hãy phân tích dựa trên kết quả bài làm thực tế và sinh nhận xét ĐÁNH GIÁ THƯỜNG XUYÊN chính xác theo Thông tư 27 gồm 4 nhóm tiêu chí (mỗi nhóm có Mã nhận xét ngắn gọn và Nội dung nhận xét cụ thể, ấm áp, đúng chuẩn hồ sơ học bạ điện tử / vnEdu):
 1. Môn học và hoạt động giáo dục (subjectCode, subjectContent): Ghi nhận sự tiến bộ, kết quả học tập môn Tin học trong tháng (${grade}).
 2. Nhận xét năng lực chung (generalCompCode, generalCompContent): Đánh giá năng lực tự chủ và tự học, giao tiếp và hợp tác, giải quyết vấn đề và sáng tạo.
 3. Nhận xét năng lực đặc thù (specificCompCode, specificCompContent): Đánh giá năng lực Tin học (sử dụng và quản lý phương tiện CNTT, ứng dụng CNTT trong học tập, tư duy thuật toán/thực hành máy tính).
@@ -1316,14 +1668,19 @@ Hãy phân tích từng học sinh và sinh nhận xét ĐÁNH GIÁ THƯỜNG XU
         return res.json(JSON.parse(response.text || '{"evaluations":[]}'));
       } else {
         const prompt = `Bạn là Chuyên gia Khảo thí & Đánh giá Học sinh Tiểu học theo đúng Thông tư 27/2020/TT-BGDĐT của Bộ Giáo dục và Đào tạo (Môn Tin học - ${grade}, ${className}, Kỳ đánh giá định kỳ: ${periodLabel}).
-Dưới đây là danh sách học sinh kèm điểm số và kết quả bài kiểm tra định kỳ:
+Dưới đây là danh sách học sinh kèm điểm số bài kiểm tra định kỳ (giữa kì/cuối kì) và dữ liệu quá trình học tập trong các tháng của học kỳ:
 ${JSON.stringify(studentsData, null, 2)}
 
-Hãy phân tích từng học sinh theo đúng quy định tại Điều 7 Thông tư 27/2020/TT-BGDĐT:
-- Mức đạt được (midtermLevel, finalLevel): "T" (Hoàn thành tốt: điểm >= 8.0 hoặc nắm vững kiến thức, thao tác thành thạo), "H" (Hoàn thành: điểm từ 5.0 đến dưới 8.0), "C" (Chưa hoàn thành: điểm dưới 5.0).
-- Điểm KTĐK (periodicScore): Điểm số bài kiểm tra định kỳ trên thang điểm 10.
+NGUYÊN TẮC BẮT BUỘC:
+- Tuyệt đối KHÔNG tự bịa ra kết quả, điểm số hay nhận xét cho bất kỳ học sinh nào chưa làm bài kiểm tra định kỳ (giữa kì/cuối kì) hoặc thiếu kết quả học tập trong các tháng của kì đó.
+- Nếu học sinh không đủ điều kiện (chưa làm bài kiểm tra định kỳ hoặc chưa có kết quả các tháng), toàn bộ mã nhận xét và nội dung nhận xét môn học, năng lực, phẩm chất của học sinh đó PHẢI để chuỗi rỗng (""), không được sinh nhận xét giả.
+- Chỉ phân tích và sinh nhận xét cho những học sinh THỰC TẾ ĐÃ CÓ KẾT QUẢ BÀI KIỂM TRA ĐỊNH KỲ VÀ KẾT QUẢ HỌC TẬP TRONG CÁC THÁNG!
+
+Đối với học sinh đủ điều kiện, hãy phân tích toàn diện kết hợp giữa kết quả bài kiểm tra định kỳ VÀ quá trình học tập trong các tháng của học kỳ theo đúng quy định tại Điều 7 Thông tư 27/2020/TT-BGDĐT:
+- Mức đạt được (midtermLevel, finalLevel): "T" (Hoàn thành tốt: điểm >= 8.0 và quá trình học tập tốt), "H" (Hoàn thành: điểm từ 5.0 đến dưới 8.0), "C" (Chưa hoàn thành: điểm dưới 5.0).
+- Điểm KTĐK (periodicScore): Điểm số bài kiểm tra định kỳ trên thang điểm 10 thực tế của học sinh.
 - Mã nhận xét (commentCode): Mã định danh mẫu câu nhận xét chuẩn trên hệ thống quản lý (VD: T01, T02, H01, H02, C01).
-- Nội dung nhận xét môn học (commentContent): Mô tả cụ thể ưu điểm (điểm mạnh) và những điểm học sinh cần cố gắng khắc phục, rèn luyện thêm trong môn Tin học ${grade}.
+- Nội dung nhận xét môn học (commentContent): Mô tả cụ thể ưu điểm và những điểm học sinh cần cố gắng rèn luyện thêm trong môn Tin học ${grade}, phản ánh cả bài thi định kỳ lẫn sự tiến bộ trong các tháng.
 - Nhận xét năng lực đặc thù (specificCompContent): Đánh giá năng lực Tin học đặc thù của học sinh trong học kỳ.
 - Nhận xét phẩm chất chủ yếu (qualityContent): Đánh giá sự hình thành và phát triển phẩm chất chủ yếu (chăm chỉ, trung thực, trách nhiệm) của học sinh.`;
 

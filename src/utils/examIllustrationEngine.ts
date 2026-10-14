@@ -685,39 +685,114 @@ export function getShuffledMcqOptions(
 
 /**
  * Kiểm tra một đề kiểm tra/bài tập có được giao cho lớp học hiện tại hay không
+ * Hỗ trợ giao cho 1 lớp cụ thể (4A1), nhiều lớp (4A1, 4A2), hoặc toàn khối (Lớp 4 / Khối 4)
  */
 export function isAssignmentAssignedToClass(
   assignment: Assignment,
   className: string,
-  classGrade: string
+  classGrade?: string
 ): boolean {
-  if (assignment.grade !== classGrade) return false;
+  if (!assignment) return false;
 
-  if (Array.isArray(assignment.targetClassNames) && assignment.targetClassNames.length > 0) {
-    return assignment.targetClassNames.includes(className);
+  const asgGrade = String(assignment.grade || "").trim();
+  const targetGrade = String(classGrade || asgGrade).trim();
+
+  // Chuẩn hóa số khối (ví dụ: "Lớp 4", "Khối 4", "4" đều trả về "4")
+  const asgGradeNum = asgGrade.match(/\d+/)?.[0] || asgGrade.toLowerCase();
+  const targetGradeNum = targetGrade.match(/\d+/)?.[0] || targetGrade.toLowerCase();
+
+  // Nếu khác khối lớp -> không hiển thị
+  if (asgGradeNum && targetGradeNum && asgGradeNum !== targetGradeNum) {
+    return false;
   }
 
+  const cNameTrimmed = String(className || "").trim();
+  const cNameLower = cNameTrimmed.toLowerCase();
   const rawClassStr = String(assignment.className || "").trim();
-  if (!rawClassStr) return true;
+  const rawClassLower = rawClassStr.toLowerCase();
 
+  const targetNames = Array.isArray(assignment.targetClassNames)
+    ? assignment.targetClassNames.map((s) => String(s || "").trim())
+    : [];
+
+  // 1. Nếu đề bài giao cho toàn khối, tất cả lớp hoặc không chỉ định lớp riêng
   if (
-    rawClassStr.toLowerCase().includes("tất cả") ||
-    rawClassStr.toLowerCase().includes("cả khối")
+    !rawClassStr ||
+    rawClassLower.includes("tất cả") ||
+    rawClassLower.includes("cả khối") ||
+    rawClassLower.includes("toàn khối") ||
+    rawClassLower.includes("chung") ||
+    rawClassStr === asgGrade ||
+    rawClassStr === targetGrade ||
+    rawClassLower === `lớp ${asgGradeNum}` ||
+    rawClassLower === `khối ${asgGradeNum}`
   ) {
-    return true;
+    // Nếu targetClassNames rỗng hoặc chứa tên khối/tất cả -> toàn bộ lớp trong khối đều nhận được
+    if (
+      targetNames.length === 0 ||
+      targetNames.some((t) => {
+        const tl = t.toLowerCase();
+        return (
+          tl.includes("tất cả") ||
+          tl.includes("cả khối") ||
+          tl.includes("toàn khối") ||
+          tl.includes("chung") ||
+          tl === asgGrade.toLowerCase() ||
+          tl === targetGrade.toLowerCase() ||
+          tl === `lớp ${asgGradeNum}` ||
+          tl === `khối ${asgGradeNum}`
+        );
+      })
+    ) {
+      return true;
+    }
   }
 
-  const classList = rawClassStr
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  if (classList.length > 1) {
-    return classList.includes(className);
+  // 2. Nếu targetClassNames có danh sách lớp cụ thể
+  if (targetNames.length > 0) {
+    if (
+      targetNames.some((t) => {
+        const tl = t.toLowerCase();
+        return (
+          tl === cNameLower ||
+          tl === `lớp ${cNameLower}` ||
+          cNameLower === `lớp ${tl}` ||
+          tl.includes(cNameLower)
+        );
+      })
+    ) {
+      return true;
+    }
   }
 
-  // Tương thích với các đề giao cho 1 lớp cụ thể hoặc cùng khối
-  return classList.includes(className);
+  // 3. Nếu targetClassNames rỗng nhưng className chuỗi có liệt kê lớp
+  if (rawClassStr) {
+    const classList = rawClassStr
+      .split(/[,;\/]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (
+      classList.some((c) => {
+        const cl = c.toLowerCase();
+        return (
+          cl === cNameLower ||
+          cl === `lớp ${cNameLower}` ||
+          cNameLower === `lớp ${cl}` ||
+          cl.includes(cNameLower) ||
+          cl === `lớp ${asgGradeNum}` ||
+          cl === `khối ${asgGradeNum}` ||
+          cl.includes("cả khối") ||
+          cl.includes("tất cả")
+        );
+      })
+    ) {
+      return true;
+    }
+  }
+
+  // Mặc định: Nếu cùng khối và không có ràng buộc cụ thể thì cho phép học sinh nhận bài
+  return targetNames.length === 0;
 }
 
 export function isAssignmentForClass(

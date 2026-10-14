@@ -29,6 +29,7 @@ import {
   ExtractedInspection,
   StudentSubmission,
 } from "../types/grading";
+import { saveSubmissionToFirestore } from "../services/firebaseService";
 import {
   analyzeSubmissionAndWriteTeacherFeedback,
   ensureTeacherPersonaThay,
@@ -707,7 +708,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
         originalFileName,
         standardizedFileName: standardizedName,
         wasFileNameAutoFixed: wasAutoFixed,
-        submittedAt: "Vừa xong",
+        submittedAt: new Date().toISOString(),
         processingTimeSec: elapsedSec,
         aiScore: computedScore,
         finalScore: computedScore,
@@ -741,6 +742,12 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
           newSubmission,
           assignments
         );
+      }
+
+      try {
+        await saveSubmissionToFirestore(newSubmission);
+      } catch (fErr) {
+        console.warn("Đồng bộ bài nộp Firestore:", fErr);
       }
 
       onNewSubmission(newSubmission);

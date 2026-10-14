@@ -190,3 +190,86 @@ export async function uploadStudentSubmissionToGoogleDrive(params: {
     driveRootFolderUrl: TARGET_DRIVE_FOLDER_URL,
   };
 }
+
+export interface GoogleDriveStatusInfo {
+  ok: boolean;
+  folderId: string;
+  folderUrl: string;
+  isConnectedToGoogle: boolean;
+  hasLocalMirror: boolean;
+  lastUpdatedAt?: string;
+  stats?: {
+    classesCount: number;
+    assignmentsCount: number;
+    submissionsCount: number;
+    regularRecordsCount: number;
+    periodicRecordsCount: number;
+  };
+}
+
+export async function fetchGoogleDriveStatus(): Promise<GoogleDriveStatusInfo | null> {
+  try {
+    const res = await fetch("/api/drive/status");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Đồng bộ toàn bộ dữ liệu thao tác của Giáo viên (lớp, đề, điểm, nhận xét TT27) và Học sinh lên Google Drive chia sẻ
+ */
+export async function syncSystemDataToGoogleDrive(statePayload?: any): Promise<{
+  ok: boolean;
+  syncedToCloud: boolean;
+  cloudFolderUrl?: string;
+  filesSynced?: string[];
+  lastSyncedAt?: string;
+  message?: string;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/drive/sync-system-state", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientAccessToken: cachedAccessToken || undefined,
+        statePayload,
+      }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return {
+      ok: false,
+      syncedToCloud: false,
+      error: err?.message || "Lỗi kết nối khi đồng bộ dữ liệu hệ thống lên Google Drive.",
+    };
+  }
+}
+
+/**
+ * Đọc và khôi phục toàn bộ dữ liệu thao tác đã sao lưu từ Google Drive (hoặc mirror) về ứng dụng
+ */
+export async function pullSystemDataFromGoogleDrive(): Promise<{
+  ok: boolean;
+  source?: "google_drive" | "local_mirror";
+  state?: any;
+  error?: string;
+}> {
+  try {
+    const headers: Record<string, string> = {};
+    if (cachedAccessToken) {
+      headers["Authorization"] = `Bearer ${cachedAccessToken}`;
+    }
+    const res = await fetch("/api/drive/pull-system-state", { headers });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: err.error || "Không thể tải dữ liệu từ Google Drive." };
+    }
+    return await res.json();
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Lỗi kết nối khi đọc dữ liệu từ Google Drive." };
+  }
+}
+

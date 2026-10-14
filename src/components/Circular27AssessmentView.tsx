@@ -10,6 +10,10 @@ import {
   BookOpenCheck,
   Award,
   Calendar,
+  AlertTriangle,
+  Check,
+  Info,
+  ShieldCheck,
 } from "lucide-react";
 import { Assignment, GradeLevel, StudentSubmission } from "../types/grading";
 import { ClassRoom, StudentRecord } from "./ClassManagerView";
@@ -61,16 +65,17 @@ export interface PeriodicEvaluationRow {
   studentName: string;
   birthDate: string;
   sourceExamTitle: string;
-  // 2. Đánh giá Giữa học kỳ (T: Hoàn thành tốt, H: Hoàn thành, C: Chưa hoàn thành)
-  midtermLevel: "T" | "H" | "C";
+  // 2. Đánh giá Giữa học kỳ (T: Hoàn thành tốt, H: Hoàn thành, C: Chưa hoàn thành, "": Chưa đánh giá)
+  midtermLevel: "T" | "H" | "C" | "";
   // 3. Đánh giá Cuối học kỳ
-  finalLevel: "T" | "H" | "C";
-  periodicScore: number; // Điểm KTĐK (thang 10)
+  finalLevel: "T" | "H" | "C" | "";
+  periodicScore: number | null; // Điểm KTĐK (thang 10), null nếu chưa làm bài
   commentCode: string; // Mã nhận xét
   commentContent: string; // Nội dung nhận xét môn học
   evaluationPeriodCode: "GK1" | "CK1" | "GK2" | "CK2"; // Thời điểm đánh giá mặc định GK1, CK1, GK2, CK2
   specificCompContent: string; // Nhận xét năng lực đặc thù
   qualityContent: string; // Nhận xét phẩm chất chủ yếu
+  isEligible?: boolean; // Cờ xác nhận đã có đủ bài KT giữa kì và kết quả học tập các tháng
 }
 
 const MONTH_OPTIONS = [
@@ -355,8 +360,195 @@ async function generateCircular27ExcelBlob(params: {
   });
 }
 
+function parseMonthAndYear(monthValue: string): { month: number; year: number } {
+  const parts = monthValue.split("-");
+  const month = parseInt(parts[0], 10);
+  const year = parseInt(parts[1], 10);
+  return { month: isNaN(month) ? 10 : month, year: isNaN(year) ? 2026 : year };
+}
+
+function isSubmissionForMonth(
+  sub: StudentSubmission,
+  assignment: Assignment | undefined,
+  monthValue: string
+): boolean {
+  const { month, year } = parseMonthAndYear(monthValue);
+  const monthNumStr = String(month);
+  const monthNumPadded = month < 10 ? `0${month}` : `${month}`;
+
+  const titleToCheck = `${sub.assignmentTitle || ""} ${assignment?.title || ""} ${assignment?.code || ""}`.toLowerCase();
+  
+  if (
+    titleToCheck.includes(monthValue.toLowerCase()) ||
+    titleToCheck.includes(`tháng ${monthNumStr}`) ||
+    titleToCheck.includes(`tháng ${monthNumPadded}`) ||
+    titleToCheck.includes(`thang ${monthNumStr}`) ||
+    titleToCheck.includes(`thang ${monthNumPadded}`)
+  ) {
+    if (month === 1 && (
+      titleToCheck.includes("tháng 10") || titleToCheck.includes("tháng 11") || titleToCheck.includes("tháng 12") ||
+      titleToCheck.includes("thang 10") || titleToCheck.includes("thang 11") || titleToCheck.includes("thang 12")
+    )) {
+      if (!titleToCheck.includes("tháng 1/") && !titleToCheck.includes("tháng 1 ") && !titleToCheck.includes("tháng 01") && !titleToCheck.includes("01-2027")) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (sub.submittedAt) {
+    const dateObj = new Date(sub.submittedAt);
+    if (!isNaN(dateObj.getTime())) {
+      if (dateObj.getMonth() + 1 === month && dateObj.getFullYear() === year) {
+        return true;
+      }
+    }
+    if (
+      sub.submittedAt.includes(`/${monthNumPadded}/${year}`) ||
+      sub.submittedAt.includes(`/${monthNumStr}/${year}`) ||
+      sub.submittedAt.includes(`-${monthNumPadded}-${year}`) ||
+      sub.submittedAt.includes(`${year}-${monthNumPadded}`)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function findMonthlySubmissionForStudent(
+  student: StudentRecord,
+  monthValue: string,
+  submissions: StudentSubmission[],
+  assignments: Assignment[]
+): StudentSubmission | undefined {
+  const studentSubs = submissions.filter(
+    (s) =>
+      s.studentId.trim().toLowerCase() === student.studentCode.trim().toLowerCase() ||
+      s.studentName.trim().toLowerCase() === student.name.trim().toLowerCase()
+  );
+
+  return studentSubs.find((s) => {
+    const asg = assignments.find((a) => a.id === s.assignmentId);
+    return isSubmissionForMonth(s, asg, monthValue);
+  });
+}
+
+function isSubmissionForPeriodicTerm(
+  sub: StudentSubmission,
+  assignment: Assignment | undefined,
+  termKey: PeriodicTermKey
+): boolean {
+  const titleToCheck = `${sub.assignmentTitle || ""} ${assignment?.title || ""} ${assignment?.code || ""}`.toLowerCase();
+  const semesterType = assignment?.theoryExam?.semesterBlueprint?.semesterType;
+
+  if (termKey === "mid_hk1") {
+    if (semesterType === "Giữa Học kỳ I") return true;
+    return (
+      titleToCheck.includes("giữa học kỳ i") ||
+      titleToCheck.includes("giữa học kỳ 1") ||
+      titleToCheck.includes("giữa hk1") ||
+      titleToCheck.includes("giữa hk 1") ||
+      titleToCheck.includes("gk1") ||
+      titleToCheck.includes("giữa kì 1") ||
+      titleToCheck.includes("giữa kỳ 1")
+    );
+  }
+
+  if (termKey === "end_hk1") {
+    if (semesterType === "Học kỳ I") return true;
+    return (
+      titleToCheck.includes("cuối học kỳ i") ||
+      titleToCheck.includes("cuối học kỳ 1") ||
+      titleToCheck.includes("cuối hk1") ||
+      titleToCheck.includes("cuối hk 1") ||
+      titleToCheck.includes("ck1") ||
+      titleToCheck.includes("cuối kì 1") ||
+      titleToCheck.includes("cuối kỳ 1") ||
+      (titleToCheck.includes("học kỳ i") && !titleToCheck.includes("giữa")) ||
+      (titleToCheck.includes("học kỳ 1") && !titleToCheck.includes("giữa"))
+    );
+  }
+
+  if (termKey === "mid_hk2") {
+    if (semesterType === "Giữa Học kỳ II") return true;
+    return (
+      titleToCheck.includes("giữa học kỳ ii") ||
+      titleToCheck.includes("giữa học kỳ 2") ||
+      titleToCheck.includes("giữa hk2") ||
+      titleToCheck.includes("giữa hk 2") ||
+      titleToCheck.includes("gk2") ||
+      titleToCheck.includes("giữa kì 2") ||
+      titleToCheck.includes("giữa kỳ 2")
+    );
+  }
+
+  if (termKey === "end_hk2") {
+    if (semesterType === "Học kỳ II") return true;
+    return (
+      titleToCheck.includes("cuối học kỳ ii") ||
+      titleToCheck.includes("cuối học kỳ 2") ||
+      titleToCheck.includes("cuối hk2") ||
+      titleToCheck.includes("cuối hk 2") ||
+      titleToCheck.includes("ck2") ||
+      titleToCheck.includes("cuối kì 2") ||
+      titleToCheck.includes("cuối kỳ 2") ||
+      (titleToCheck.includes("học kỳ ii") && !titleToCheck.includes("giữa")) ||
+      (titleToCheck.includes("học kỳ 2") && !titleToCheck.includes("giữa"))
+    );
+  }
+
+  return false;
+}
+
+function findPeriodicSubmissionForStudent(
+  student: StudentRecord,
+  termKey: PeriodicTermKey,
+  submissions: StudentSubmission[],
+  assignments: Assignment[]
+): StudentSubmission | undefined {
+  const studentSubs = submissions.filter(
+    (s) =>
+      s.studentId.trim().toLowerCase() === student.studentCode.trim().toLowerCase() ||
+      s.studentName.trim().toLowerCase() === student.name.trim().toLowerCase()
+  );
+
+  return studentSubs.find((s) => {
+    const asg = assignments.find((a) => a.id === s.assignmentId);
+    return isSubmissionForPeriodicTerm(s, asg, termKey);
+  });
+}
+
+function getMonthlyStudySubmissionsForTerm(
+  student: StudentRecord,
+  termKey: PeriodicTermKey,
+  submissions: StudentSubmission[],
+  assignments: Assignment[]
+): StudentSubmission[] {
+  const isHk1 = termKey === "mid_hk1" || termKey === "end_hk1";
+  const validMonths = isHk1
+    ? ["09-2026", "10-2026", "11-2026", "12-2026"]
+    : ["01-2027", "02-2027", "03-2027", "04-2027", "05-2027"];
+
+  const studentSubs = submissions.filter(
+    (s) =>
+      s.studentId.trim().toLowerCase() === student.studentCode.trim().toLowerCase() ||
+      s.studentName.trim().toLowerCase() === student.name.trim().toLowerCase()
+  );
+
+  return studentSubs.filter((sub) => {
+    const asg = assignments.find((a) => a.id === sub.assignmentId);
+    if (isSubmissionForPeriodicTerm(sub, asg, termKey)) {
+      return false;
+    }
+    return validMonths.some((m) => isSubmissionForMonth(sub, asg, m)) ||
+      (sub.assignmentTitle && !sub.assignmentTitle.toLowerCase().includes("định kỳ") && !sub.assignmentTitle.toLowerCase().includes("học kỳ"));
+  });
+}
+
 /**
  * Ngân hàng phân tích Thông tư 27/2020/TT-BGDĐT chuẩn xác theo Khối lớp (Lớp 3, 4, 5) và điểm số thực tế
+ * NGUYÊN TẮC: Nếu học sinh chưa làm bài kiểm tra của tháng -> KHÔNG CÓ DỮ LIỆU. AI không được tự bịa kết quả!
  */
 function buildCircular27RegularEvaluationForStudent(params: {
   student: StudentRecord;
@@ -365,26 +557,23 @@ function buildCircular27RegularEvaluationForStudent(params: {
   monthValue: string;
   matchedSubmission?: StudentSubmission;
   matchedAssignment?: Assignment;
-  allowFallbackWhenNoSubmission?: boolean;
 }): RegularMonthlyEvaluationRow {
   const {
     student,
-    studentIdx,
     grade,
     monthValue,
     matchedSubmission,
-    matchedAssignment,
-    allowFallbackWhenNoSubmission = false,
   } = params;
 
-  if (!matchedSubmission && !allowFallbackWhenNoSubmission) {
+  // QUY TẮC BẮT BUỘC THEO YÊU CẦU: Nếu học sinh chưa làm bài kiểm tra của tháng thì KHÔNG CÓ DỮ LIỆU.
+  if (!matchedSubmission) {
     return {
       studentId: student.id,
       studentCode: student.studentCode,
       studentName: student.name,
       birthDate: student.birthDate || "15/05/2018",
       monthlyScoreRef: null,
-      monthlySourceTitle: "Chưa có dữ liệu bài làm",
+      monthlySourceTitle: `Chưa làm bài kiểm tra tháng ${monthValue}`,
       subjectCode: "",
       subjectContent: "",
       generalCompCode: "",
@@ -396,16 +585,8 @@ function buildCircular27RegularEvaluationForStudent(params: {
     };
   }
 
-  const deterministicFallbackScores = [9.5, 8.5, 9.0, 7.5, 8.0, 10.0, 7.0, 8.5, 6.5, 9.0];
-  const score = matchedSubmission
-    ? matchedSubmission.finalScore
-    : deterministicFallbackScores[studentIdx % deterministicFallbackScores.length];
-
-  const sourceTitle = matchedSubmission
-    ? matchedSubmission.assignmentTitle
-    : matchedAssignment
-    ? matchedAssignment.title
-    : `Bài kiểm tra định kỳ hàng tháng (${monthValue}) — Môn Tin học ${grade}`;
+  const score = matchedSubmission.finalScore;
+  const sourceTitle = matchedSubmission.assignmentTitle;
 
   const gradeSkillText =
     grade === "Lớp 3"
@@ -488,64 +669,79 @@ function getDefaultPeriodCodeForTerm(
   return "CK2";
 }
 
+/**
+ * Đánh giá định kỳ (Giữa HK1, Cuối HK1, Giữa HK2, Cuối HK2) theo Thông tư 27
+ * NGUYÊN TẮC: Bắt buộc học sinh phải có kết quả làm bài giữa kì VÀ kết quả học tập trong các tháng của kì đó
+ * thì mới phân tích và nhận xét chứ KHÔNG tự bịa ra kết quả cho học sinh!
+ */
 function buildCircular27PeriodicEvaluationForStudent(params: {
   student: StudentRecord;
   studentIdx: number;
   grade: GradeLevel;
   termKey: PeriodicTermKey;
   matchedSubmission?: StudentSubmission;
-  matchedAssignment?: Assignment;
-  allowFallbackWhenNoSubmission?: boolean;
+  monthlyStudySubmissions?: StudentSubmission[];
 }): PeriodicEvaluationRow {
   const {
     student,
-    studentIdx,
     grade,
     termKey,
     matchedSubmission,
-    matchedAssignment,
-    allowFallbackWhenNoSubmission = false,
+    monthlyStudySubmissions = [],
   } = params;
 
   const evaluationPeriodCode = getDefaultPeriodCodeForTerm(termKey);
+  const isMidterm = termKey.startsWith("mid");
+  const termNameLabel = PERIODIC_TERM_OPTIONS.find((t) => t.value === termKey)?.label || termKey;
 
-  if (!matchedSubmission && !allowFallbackWhenNoSubmission) {
+  const hasPeriodicExam = Boolean(matchedSubmission);
+  const hasMonthlyStudy = monthlyStudySubmissions.length > 0;
+  const isEligible = hasPeriodicExam && hasMonthlyStudy;
+
+  if (!isEligible) {
+    let reasonTitle = "Chưa có dữ liệu bài làm";
+    if (!hasPeriodicExam && !hasMonthlyStudy) {
+      reasonTitle = isMidterm
+        ? "Chưa làm bài KT giữa kì & chưa có kết quả các tháng"
+        : "Chưa làm bài KT cuối kì & chưa có kết quả các tháng";
+    } else if (!hasPeriodicExam) {
+      reasonTitle = isMidterm
+        ? `Chưa làm bài kiểm tra giữa kì (${termNameLabel})`
+        : `Chưa làm bài kiểm tra cuối kì (${termNameLabel})`;
+    } else if (!hasMonthlyStudy) {
+      reasonTitle = isMidterm
+        ? `Chưa có kết quả học tập các tháng trước giữa kì`
+        : `Chưa có kết quả học tập các tháng trong học kỳ`;
+    }
+
     return {
       studentId: student.id,
       studentCode: student.studentCode,
       studentName: student.name,
       birthDate: student.birthDate || "15/05/2018",
-      sourceExamTitle: "Chưa có dữ liệu bài làm",
-      midtermLevel: "" as any,
-      finalLevel: "" as any,
-      periodicScore: "" as any,
+      sourceExamTitle: reasonTitle,
+      midtermLevel: "",
+      finalLevel: "",
+      periodicScore: null,
       commentCode: "",
       commentContent: "",
       evaluationPeriodCode,
       specificCompContent: "",
       qualityContent: "",
+      isEligible: false,
     };
   }
 
-  const fallbackScores = [9.0, 8.5, 9.5, 7.5, 8.0, 10.0, 7.0, 8.5, 6.5, 9.0];
-  const rawScore = matchedSubmission
-    ? matchedSubmission.finalScore
-    : fallbackScores[studentIdx % fallbackScores.length];
+  const rawScore = matchedSubmission!.finalScore;
   const roundedScore = Math.round(rawScore * 2) / 2;
 
   const level: "T" | "H" | "C" =
     roundedScore >= 8.0 ? "T" : roundedScore >= 5.0 ? "H" : "C";
 
-  const midtermLevel: "T" | "H" | "C" =
-    roundedScore >= 8.0 ? "T" : roundedScore >= 5.0 ? "H" : "C";
+  const midtermLevel: "T" | "H" | "C" = level;
+  const finalLevel: "T" | "H" | "C" = level;
 
-  const sourceExamTitle = matchedSubmission
-    ? matchedSubmission.assignmentTitle
-    : matchedAssignment
-    ? matchedAssignment.title
-    : `Đề kiểm tra định kỳ ${
-        PERIODIC_TERM_OPTIONS.find((t) => t.value === termKey)?.label || termKey
-      } — Tin học ${grade}`;
+  const sourceExamTitle = matchedSubmission!.assignmentTitle;
 
   const gradeTopicStrength =
     grade === "Lớp 3"
@@ -562,7 +758,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
       birthDate: student.birthDate || "15/05/2018",
       sourceExamTitle,
       midtermLevel,
-      finalLevel: "T",
+      finalLevel,
       periodicScore: roundedScore,
       commentCode: termKey.startsWith("mid") ? "GK-T01" : "CK-T01",
       commentContent: `Nắm vững kiến thức và kỹ năng môn Tin học ${grade}, thực hành thành thạo ${gradeTopicStrength}, bài làm đạt kết quả tốt.`,
@@ -571,6 +767,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
         "Sử dụng và quản lý phương tiện CNTT đúng quy trình; vận dụng linh hoạt phần mềm để hoàn thành tốt nhiệm vụ thực hành.",
       qualityContent:
         "Chăm chỉ, tự giác hoàn thành nhiệm vụ học tập; trung thực trong làm bài và có ý thức bảo quản thiết bị phòng máy tính.",
+      isEligible: true,
     };
   }
 
@@ -582,7 +779,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
       birthDate: student.birthDate || "15/05/2018",
       sourceExamTitle,
       midtermLevel,
-      finalLevel: "H",
+      finalLevel,
       periodicScore: roundedScore,
       commentCode: termKey.startsWith("mid") ? "GK-H01" : "CK-H01",
       commentContent: `Hoàn thành yêu cầu cơ bản về ${gradeTopicStrength}; cần kiểm tra kỹ định dạng trình bày và quy tắc đặt tên tệp trước khi nộp bài.`,
@@ -591,6 +788,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
         "Thực hiện được các thao tác cơ bản trên phần mềm học tập; cần rèn luyện thêm tốc độ gõ phím và thao tác lưu tệp đúng thư mục.",
       qualityContent:
         "Chăm chỉ, nghiêm túc thực hiện nội quy phòng máy tính; có trách nhiệm hoàn thành bài tập được giao.",
+      isEligible: true,
     };
   }
 
@@ -601,7 +799,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
     birthDate: student.birthDate || "15/05/2018",
     sourceExamTitle,
     midtermLevel,
-    finalLevel: "C",
+    finalLevel,
     periodicScore: roundedScore,
     commentCode: termKey.startsWith("mid") ? "GK-C01" : "CK-C01",
     commentContent: `Có cố gắng tham gia thực hành trên máy tính; cần ôn tập kỹ hơn các thao tác cơ bản về ${gradeTopicStrength}.`,
@@ -610,6 +808,7 @@ function buildCircular27PeriodicEvaluationForStudent(params: {
       "Cần rèn luyện thêm thao tác chuột, bàn phím và cách lưu tệp bài làm đúng quy định trên máy tính.",
     qualityContent:
       "Có cố gắng trong giờ học, ngoan ngoãn, biết giữ gìn vệ sinh và bảo quản thiết bị phòng máy.",
+    isEligible: true,
   };
 }
 
@@ -735,10 +934,11 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
     );
 
     return activeClass.students.map((st, idx) => {
-      const matchedSub = classSubmissions.find(
-        (s) =>
-          s.studentId.trim().toLowerCase() === st.studentCode.trim().toLowerCase() ||
-          s.studentName.trim().toLowerCase() === st.name.trim().toLowerCase()
+      const matchedSub = findMonthlySubmissionForStudent(
+        st,
+        selectedMonth,
+        classSubmissions,
+        assignments
       );
       return buildCircular27RegularEvaluationForStudent({
         student: st,
@@ -746,7 +946,6 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         grade: activeClass.grade,
         monthValue: selectedMonth,
         matchedSubmission: matchedSub,
-        matchedAssignment: classAssignments[0],
       });
     });
   }, [
@@ -765,27 +964,30 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
     const classSubmissions = submissions.filter(
       (s) => s.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase()
     );
-    const classAssignments = assignments.filter(
-      (a) =>
-        a.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase() ||
-        a.grade === activeClass.grade
-    );
 
     const existing = periodicRecordsByMap[periodicKey];
     if (existing && existing.length === activeClass.students.length) {
       return activeClass.students.map((st, idx) => {
         const found = existing.find((r) => r.studentId === st.id) || existing[idx];
+        const periodicSub = findPeriodicSubmissionForStudent(
+          st,
+          selectedPeriodicTerm,
+          classSubmissions,
+          assignments
+        );
+        const monthlySubs = getMonthlyStudySubmissionsForTerm(
+          st,
+          selectedPeriodicTerm,
+          classSubmissions,
+          assignments
+        );
         const fallbackRow = buildCircular27PeriodicEvaluationForStudent({
           student: st,
           studentIdx: idx,
           grade: activeClass.grade,
           termKey: selectedPeriodicTerm,
-          matchedSubmission: classSubmissions.find(
-            (s) =>
-              s.studentId.trim().toLowerCase() === st.studentCode.trim().toLowerCase() ||
-              s.studentName.trim().toLowerCase() === st.name.trim().toLowerCase()
-          ),
-          matchedAssignment: classAssignments[0],
+          matchedSubmission: periodicSub,
+          monthlyStudySubmissions: monthlySubs,
         });
         return {
           ...fallbackRow,
@@ -803,18 +1005,25 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
     }
 
     return activeClass.students.map((st, idx) => {
-      const matchedSub = classSubmissions.find(
-        (s) =>
-          s.studentId.trim().toLowerCase() === st.studentCode.trim().toLowerCase() ||
-          s.studentName.trim().toLowerCase() === st.name.trim().toLowerCase()
+      const periodicSub = findPeriodicSubmissionForStudent(
+        st,
+        selectedPeriodicTerm,
+        classSubmissions,
+        assignments
+      );
+      const monthlySubs = getMonthlyStudySubmissionsForTerm(
+        st,
+        selectedPeriodicTerm,
+        classSubmissions,
+        assignments
       );
       return buildCircular27PeriodicEvaluationForStudent({
         student: st,
         studentIdx: idx,
         grade: activeClass.grade,
         termKey: selectedPeriodicTerm,
-        matchedSubmission: matchedSub,
-        matchedAssignment: classAssignments[0],
+        matchedSubmission: periodicSub,
+        monthlyStudySubmissions: monthlySubs,
       });
     });
   }, [
@@ -837,17 +1046,13 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         (s) =>
           s.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase()
       );
-      const classAssignments = assignments.filter(
-        (a) =>
-          a.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase() ||
-          a.grade === activeClass.grade
-      );
 
       const baseRows = activeClass.students.map((st, idx) => {
-        const matchedSub = classSubmissions.find(
-          (s) =>
-            s.studentId.trim().toLowerCase() === st.studentCode.trim().toLowerCase() ||
-            s.studentName.trim().toLowerCase() === st.name.trim().toLowerCase()
+        const matchedSub = findMonthlySubmissionForStudent(
+          st,
+          selectedMonth,
+          classSubmissions,
+          assignments
         );
         return buildCircular27RegularEvaluationForStudent({
           student: st,
@@ -855,10 +1060,22 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
           grade: activeClass.grade,
           monthValue: selectedMonth,
           matchedSubmission: matchedSub,
-          matchedAssignment: classAssignments[0],
-          allowFallbackWhenNoSubmission: true,
         });
       });
+
+      const testedRows = baseRows.filter((r) => r.monthlyScoreRef !== null);
+
+      if (testedRows.length === 0) {
+        const nextMap = { ...regularRecordsByMap, [regularKey]: baseRows };
+        setRegularRecordsByMap(nextMap);
+        syncStateToCodebase({ tt27RegularRecords: nextMap }).then((r) => {
+          if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
+        });
+        setRegularSaveNotice(
+          `⚠️ Lớp ${activeClass.name} chưa có học sinh nào làm bài kiểm tra của tháng ${selectedMonth}. Hệ thống giữ nguyên trạng thái không có dữ liệu và không tự bịa nhận xét!`
+        );
+        return;
+      }
 
       try {
         const response = await fetch("/api/ai/evaluate-tt27", {
@@ -869,7 +1086,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
             grade: activeClass.grade,
             className: activeClass.name,
             periodLabel: selectedMonth,
-            studentsData: baseRows.map((r) => ({
+            studentsData: testedRows.map((r) => ({
               studentId: r.studentId,
               studentName: r.studentName,
               birthDate: r.birthDate,
@@ -883,6 +1100,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
           const data = await response.json();
           if (Array.isArray(data.evaluations) && data.evaluations.length > 0) {
             const merged = baseRows.map((row) => {
+              if (row.monthlyScoreRef === null) return row;
               const aiItem = data.evaluations.find(
                 (e: any) => e.studentId === row.studentId
               );
@@ -907,13 +1125,13 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
               if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
             });
             setRegularSaveNotice(
-              `Đã lấy dữ liệu bài kiểm tra tháng ${selectedMonth} của ${activeClass.name} (${merged.length} học sinh), phân tích Thông tư 27 và cập nhật vào code!`
+              `Đã lấy dữ liệu bài kiểm tra tháng ${selectedMonth} cho ${testedRows.length}/${baseRows.length} học sinh đã làm bài (${baseRows.length - testedRows.length} học sinh chưa làm bài giữ nguyên không có dữ liệu, AI không tự bịa)!`
             );
             return;
           }
         }
       } catch {
-        // Fallback sử dụng bộ quy tắc chuẩn Thông tư 27 đã tổng hợp
+        // Fallback sử dụng bộ quy tắc chuẩn Thông tư 27 đã tổng hợp cho học sinh đã làm bài
       }
 
       const nextMap = { ...regularRecordsByMap, [regularKey]: baseRows };
@@ -922,7 +1140,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
       });
       setRegularSaveNotice(
-        `Đã lấy dữ liệu bài kiểm tra tháng ${selectedMonth} của ${activeClass.name} (${baseRows.length} học sinh), phân tích Thông tư 27 và cập nhật vào code!`
+        `Đã cập nhật bài kiểm tra tháng ${selectedMonth} cho ${testedRows.length}/${baseRows.length} học sinh đã làm bài (${baseRows.length - testedRows.length} học sinh chưa làm bài không có dữ liệu)!`
       );
     } finally {
       setIsFetchingRegularAI(false);
@@ -1038,28 +1256,45 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         (s) =>
           s.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase()
       );
-      const classAssignments = assignments.filter(
-        (a) =>
-          a.className.trim().toLowerCase() === activeClass.name.trim().toLowerCase() ||
-          a.grade === activeClass.grade
-      );
 
       const baseRows = activeClass.students.map((st, idx) => {
-        const matchedSub = classSubmissions.find(
-          (s) =>
-            s.studentId.trim().toLowerCase() === st.studentCode.trim().toLowerCase() ||
-            s.studentName.trim().toLowerCase() === st.name.trim().toLowerCase()
+        const periodicSub = findPeriodicSubmissionForStudent(
+          st,
+          selectedPeriodicTerm,
+          classSubmissions,
+          assignments
+        );
+        const monthlySubs = getMonthlyStudySubmissionsForTerm(
+          st,
+          selectedPeriodicTerm,
+          classSubmissions,
+          assignments
         );
         return buildCircular27PeriodicEvaluationForStudent({
           student: st,
           studentIdx: idx,
           grade: activeClass.grade,
           termKey: selectedPeriodicTerm,
-          matchedSubmission: matchedSub,
-          matchedAssignment: classAssignments[0],
-          allowFallbackWhenNoSubmission: true,
+          matchedSubmission: periodicSub,
+          monthlyStudySubmissions: monthlySubs,
         });
       });
+
+      const eligibleRows = baseRows.filter(
+        (r) => r.isEligible && r.periodicScore !== null
+      );
+
+      if (eligibleRows.length === 0) {
+        const nextMap = { ...periodicRecordsByMap, [periodicKey]: baseRows };
+        setPeriodicRecordsByMap(nextMap);
+        syncStateToCodebase({ tt27PeriodicRecords: nextMap }).then((r) => {
+          if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
+        });
+        setPeriodicSaveNotice(
+          `⚠️ Lớp ${activeClass.name} chưa có học sinh nào đủ điều kiện đánh giá định kỳ (${currentPeriodicTermMeta.label}). Bắt buộc phải có kết quả làm bài giữa kì và kết quả học tập các tháng. Hệ thống không tự bịa ra kết quả!`
+        );
+        return;
+      }
 
       try {
         const response = await fetch("/api/ai/evaluate-tt27", {
@@ -1070,13 +1305,26 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
             grade: activeClass.grade,
             className: activeClass.name,
             periodLabel: currentPeriodicTermMeta.label,
-            studentsData: baseRows.map((r) => ({
-              studentId: r.studentId,
-              studentName: r.studentName,
-              birthDate: r.birthDate,
-              periodicScore: r.periodicScore,
-              examTitle: r.sourceExamTitle,
-            })),
+            studentsData: eligibleRows.map((r) => {
+              const st = activeClass.students.find((s) => s.id === r.studentId)!;
+              const monthlySubs = getMonthlyStudySubmissionsForTerm(
+                st,
+                selectedPeriodicTerm,
+                classSubmissions,
+                assignments
+              );
+              return {
+                studentId: r.studentId,
+                studentName: r.studentName,
+                birthDate: r.birthDate,
+                periodicScore: r.periodicScore,
+                examTitle: r.sourceExamTitle,
+                monthlyLearningScores: monthlySubs.map((m) => ({
+                  title: m.assignmentTitle,
+                  score: m.finalScore,
+                })),
+              };
+            }),
           }),
         });
 
@@ -1084,11 +1332,12 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
           const data = await response.json();
           if (Array.isArray(data.evaluations) && data.evaluations.length > 0) {
             const merged = baseRows.map((row) => {
+              if (!row.isEligible || row.periodicScore === null) return row;
               const aiItem = data.evaluations.find(
                 (e: any) => e.studentId === row.studentId
               );
               if (!aiItem) return row;
-              const validLevel = (val: any): "T" | "H" | "C" =>
+              const validLevel = (val: any): "T" | "H" | "C" | "" =>
                 val === "T" || val === "H" || val === "C" ? val : row.finalLevel;
               return {
                 ...row,
@@ -1111,13 +1360,13 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
               if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
             });
             setPeriodicSaveNotice(
-              `Đã lấy dữ liệu bài kiểm tra định kỳ (${currentPeriodicTermMeta.label}) của ${activeClass.name} (${merged.length} học sinh), phân tích Thông tư 27 và cập nhật vào code!`
+              `Đã lấy dữ liệu và AI phân tích Thông tư 27 (${currentPeriodicTermMeta.label}) cho ${eligibleRows.length}/${baseRows.length} học sinh đủ điều kiện (có bài KT giữa kì & kết quả học tập các tháng). ${baseRows.length - eligibleRows.length} học sinh chưa đủ điều kiện không có dữ liệu!`
             );
             return;
           }
         }
       } catch {
-        // Fallback sử dụng kết quả chuẩn Thông tư 27
+        // Fallback sử dụng kết quả chuẩn Thông tư 27 cho học sinh đủ điều kiện
       }
 
       const nextMap = { ...periodicRecordsByMap, [periodicKey]: baseRows };
@@ -1126,7 +1375,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         if (r.ok && onCodeSyncSuccess) onCodeSyncSuccess(r.lastUpdatedAt);
       });
       setPeriodicSaveNotice(
-        `Đã lấy dữ liệu bài kiểm tra định kỳ (${currentPeriodicTermMeta.label}) của ${activeClass.name} (${baseRows.length} học sinh), phân tích Thông tư 27 và cập nhật vào code!`
+        `Đã cập nhật đánh giá định kỳ (${currentPeriodicTermMeta.label}) cho ${eligibleRows.length}/${baseRows.length} học sinh đủ điều kiện (${baseRows.length - eligibleRows.length} học sinh chưa đủ điều kiện giữ nguyên không có dữ liệu)!`
       );
     } finally {
       setIsFetchingPeriodicAI(false);
@@ -1159,12 +1408,19 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
       if (row.studentId !== studentId) return row;
       const updated = { ...row, [field]: value };
       if (field === "periodicScore") {
-        const num = Number(value);
-        if (!Number.isNaN(num) && String(value).trim() !== "") {
-          const autoLevel: "T" | "H" | "C" =
-            num >= 8.0 ? "T" : num >= 5.0 ? "H" : "C";
-          updated.finalLevel = autoLevel;
-          updated.midtermLevel = autoLevel;
+        if (value === null || value === "" || value === undefined) {
+          updated.periodicScore = null;
+          updated.finalLevel = "";
+          updated.midtermLevel = "";
+        } else {
+          const num = Number(value);
+          if (!Number.isNaN(num)) {
+            updated.periodicScore = num;
+            const autoLevel: "T" | "H" | "C" =
+              num >= 8.0 ? "T" : num >= 5.0 ? "H" : "C";
+            updated.finalLevel = autoLevel;
+            updated.midtermLevel = autoLevel;
+          }
         }
       }
       return updated;
@@ -1221,13 +1477,13 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
         r.studentCode,
         r.studentName,
         r.birthDate,
-        levelVal,
-        r.periodicScore,
-        r.commentCode,
-        r.commentContent,
+        levelVal || "",
+        r.periodicScore !== null && r.periodicScore !== undefined ? r.periodicScore : "",
+        r.commentCode || "",
+        r.commentContent || "",
         periodCodeVal,
-        r.specificCompContent,
-        r.qualityContent,
+        r.specificCompContent || "",
+        r.qualityContent || "",
       ];
     });
 
@@ -1433,6 +1689,24 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
             </div>
           </div>
 
+          {/* Thanh thống kê trạng thái bài kiểm tra của tháng */}
+          <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="font-semibold text-slate-700">Dữ liệu Tháng {selectedMonth}:</span>
+              <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200">
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                Đã có điểm KT tháng: {currentRegularRows.filter((r) => r.monthlyScoreRef !== null).length} / {currentRegularRows.length} HS
+              </span>
+              <span className="inline-flex items-center gap-1 font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded border border-amber-200">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                Chưa làm bài KT tháng: {currentRegularRows.filter((r) => r.monthlyScoreRef === null).length} HS (Không có dữ liệu, AI không tự bịa)
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-500 italic">
+              * Học sinh chưa làm bài kiểm tra tháng sẽ không có dữ liệu; AI phân tích không tự bịa ra nhận xét.
+            </div>
+          </div>
+
           {regularSaveNotice && (
             <div className="px-5 py-2.5 bg-emerald-50 border-b border-emerald-200 text-xs font-semibold text-emerald-800 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1545,172 +1819,235 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {currentRegularRows.map((row, idx) => (
-                  <tr
-                    key={row.studentId}
-                    className="hover:bg-sky-50/40 transition-colors align-top"
-                  >
-                    <td className="py-2.5 px-2.5 text-center font-mono text-slate-700 border-r border-slate-200 bg-slate-50/60">
-                      {idx + 1}
-                    </td>
-                    <td className="py-2.5 px-3 border-r border-slate-200 bg-slate-50/40">
-                      <div className="font-semibold text-slate-900">
-                        {row.studentName}
-                      </div>
-                      <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                        {row.studentCode}
-                        {row.monthlyScoreRef !== null && (
-                          <span className="ml-1.5 text-[#0E6BA8] font-semibold">
-                            · ĐKT tháng: {row.monthlyScoreRef.toFixed(1)}đ
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-center font-mono text-slate-700 border-r border-slate-200 bg-slate-50/40 whitespace-nowrap">
-                      {row.birthDate}
-                    </td>
+                {currentRegularRows.map((row, idx) => {
+                  const isUntested = row.monthlyScoreRef === null;
+                  return (
+                    <tr
+                      key={row.studentId}
+                      className="hover:bg-sky-50/40 transition-colors align-top"
+                    >
+                      <td className="py-2.5 px-2.5 text-center font-mono text-slate-700 border-r border-slate-200 bg-slate-50/60">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-3 border-r border-slate-200 bg-slate-50/40">
+                        <div className="font-semibold text-slate-900">
+                          {row.studentName}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                          {row.studentCode}
+                          {!isUntested ? (
+                            <span className="ml-1.5 text-[#0E6BA8] font-semibold">
+                              · ĐKT: {row.monthlyScoreRef?.toFixed(1)}đ
+                            </span>
+                          ) : (
+                            <span className="ml-1.5 inline-flex items-center gap-1 text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 text-[10px] font-medium">
+                              <AlertTriangle className="w-2.5 h-2.5" /> Chưa làm bài KT tháng
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono text-slate-700 border-r border-slate-200 bg-slate-50/40 whitespace-nowrap">
+                        {row.birthDate}
+                      </td>
 
-                    {/* 1. Môn học và hoạt động giáo dục */}
-                    {(regularCategoryFilter === "all" ||
-                      regularCategoryFilter === "subject") && (
-                      <>
-                        <td className="p-2 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.subjectCode}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "subjectCode",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-2 py-1.5 text-center font-mono text-xs bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                        <td className="p-2 border-r border-slate-200">
-                          <textarea
-                            rows={3}
-                            value={row.subjectContent}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "subjectContent",
-                                e.target.value
-                              )
-                            }
-                            className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                      </>
-                    )}
+                      {/* 1. Môn học và hoạt động giáo dục */}
+                      {(regularCategoryFilter === "all" ||
+                        regularCategoryFilter === "subject") && (
+                        <>
+                          <td className="p-2 border-r border-slate-200">
+                            <input
+                              type="text"
+                              value={row.subjectCode}
+                              placeholder={isUntested ? "—" : "Mã"}
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "subjectCode",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full px-2 py-1.5 text-center font-mono text-xs rounded border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50 text-slate-400 border-slate-200 placeholder:text-slate-400"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                          <td className="p-2 border-r border-slate-200">
+                            <textarea
+                              rows={3}
+                              value={row.subjectContent}
+                              placeholder={
+                                isUntested
+                                  ? `Chưa làm bài kiểm tra tháng (${selectedMonth}) — Không có dữ liệu đánh giá`
+                                  : "Nội dung nhận xét môn học..."
+                              }
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "subjectContent",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                        </>
+                      )}
 
-                    {/* 2. Nhận xét năng lực chung */}
-                    {(regularCategoryFilter === "all" ||
-                      regularCategoryFilter === "general_comp") && (
-                      <>
-                        <td className="p-2 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.generalCompCode}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "generalCompCode",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-2 py-1.5 text-center font-mono text-xs bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                        <td className="p-2 border-r border-slate-200">
-                          <textarea
-                            rows={3}
-                            value={row.generalCompContent}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "generalCompContent",
-                                e.target.value
-                              )
-                            }
-                            className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                      </>
-                    )}
+                      {/* 2. Nhận xét năng lực chung */}
+                      {(regularCategoryFilter === "all" ||
+                        regularCategoryFilter === "general_comp") && (
+                        <>
+                          <td className="p-2 border-r border-slate-200">
+                            <input
+                              type="text"
+                              value={row.generalCompCode}
+                              placeholder={isUntested ? "—" : "Mã"}
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "generalCompCode",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full px-2 py-1.5 text-center font-mono text-xs rounded border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50 text-slate-400 border-slate-200 placeholder:text-slate-400"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                          <td className="p-2 border-r border-slate-200">
+                            <textarea
+                              rows={3}
+                              value={row.generalCompContent}
+                              placeholder={
+                                isUntested
+                                  ? "Chưa có dữ liệu bài làm — Không có nhận xét"
+                                  : "Nội dung nhận xét năng lực chung..."
+                              }
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "generalCompContent",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                        </>
+                      )}
 
-                    {/* 3. Nhận xét năng lực đặc thù */}
-                    {(regularCategoryFilter === "all" ||
-                      regularCategoryFilter === "specific_comp") && (
-                      <>
-                        <td className="p-2 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.specificCompCode}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "specificCompCode",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-2 py-1.5 text-center font-mono text-xs bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                        <td className="p-2 border-r border-slate-200">
-                          <textarea
-                            rows={3}
-                            value={row.specificCompContent}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "specificCompContent",
-                                e.target.value
-                              )
-                            }
-                            className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                      </>
-                    )}
+                      {/* 3. Nhận xét năng lực đặc thù */}
+                      {(regularCategoryFilter === "all" ||
+                        regularCategoryFilter === "specific_comp") && (
+                        <>
+                          <td className="p-2 border-r border-slate-200">
+                            <input
+                              type="text"
+                              value={row.specificCompCode}
+                              placeholder={isUntested ? "—" : "Mã"}
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "specificCompCode",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full px-2 py-1.5 text-center font-mono text-xs rounded border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50 text-slate-400 border-slate-200 placeholder:text-slate-400"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                          <td className="p-2 border-r border-slate-200">
+                            <textarea
+                              rows={3}
+                              value={row.specificCompContent}
+                              placeholder={
+                                isUntested
+                                  ? "Chưa có dữ liệu bài làm — Không có nhận xét"
+                                  : "Nội dung nhận xét năng lực đặc thù Tin học..."
+                              }
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "specificCompContent",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                        </>
+                      )}
 
-                    {/* 4. Nhận xét phẩm chất chủ yếu */}
-                    {(regularCategoryFilter === "all" ||
-                      regularCategoryFilter === "quality") && (
-                      <>
-                        <td className="p-2 border-r border-slate-200">
-                          <input
-                            type="text"
-                            value={row.qualityCode}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "qualityCode",
-                                e.target.value
-                              )
-                            }
-                            className="w-full px-2 py-1.5 text-center font-mono text-xs bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                        <td className="p-2">
-                          <textarea
-                            rows={3}
-                            value={row.qualityContent}
-                            onChange={(e) =>
-                              handleUpdateRegularCell(
-                                row.studentId,
-                                "qualityContent",
-                                e.target.value
-                              )
-                            }
-                            className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
-                          />
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))}
+                      {/* 4. Nhận xét phẩm chất chủ yếu */}
+                      {(regularCategoryFilter === "all" ||
+                        regularCategoryFilter === "quality") && (
+                        <>
+                          <td className="p-2 border-r border-slate-200">
+                            <input
+                              type="text"
+                              value={row.qualityCode}
+                              placeholder={isUntested ? "—" : "Mã"}
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "qualityCode",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full px-2 py-1.5 text-center font-mono text-xs rounded border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50 text-slate-400 border-slate-200 placeholder:text-slate-400"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                          <td className="p-2">
+                            <textarea
+                              rows={3}
+                              value={row.qualityContent}
+                              placeholder={
+                                isUntested
+                                  ? "Chưa có dữ liệu bài làm — Không có nhận xét"
+                                  : "Nội dung nhận xét phẩm chất chủ yếu..."
+                              }
+                              onChange={(e) =>
+                                handleUpdateRegularCell(
+                                  row.studentId,
+                                  "qualityContent",
+                                  e.target.value
+                                )
+                              }
+                              className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                                isUntested
+                                  ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                                  : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                              }`}
+                            />
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1856,6 +2193,24 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
             </div>
           </div>
 
+          {/* Thanh thống kê điều kiện đánh giá định kỳ */}
+          <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <span className="font-semibold text-slate-700">Điều kiện Đánh giá ({currentPeriodicTermMeta.label}):</span>
+              <span className="inline-flex items-center gap-1 font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded border border-emerald-200">
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                Đủ điều kiện: {currentPeriodicRows.filter((r) => r.isEligible !== false && r.periodicScore !== null).length} / {currentPeriodicRows.length} HS
+              </span>
+              <span className="inline-flex items-center gap-1 font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded border border-amber-200">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                Chưa đủ điều kiện: {currentPeriodicRows.filter((r) => r.isEligible === false || r.periodicScore === null).length} HS (Không có dữ liệu, AI không tự bịa)
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-500 italic">
+              * Bắt buộc phải có cả bài kiểm tra định kỳ VÀ kết quả học tập các tháng trong học kỳ thì AI mới phân tích và nhận xét.
+            </div>
+          </div>
+
           {periodicSaveNotice && (
             <div className="px-5 py-2.5 bg-emerald-50 border-b border-emerald-200 text-xs font-semibold text-emerald-800 flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -1909,6 +2264,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                   const isEnd = currentPeriodicTermMeta.isEndTerm;
                   const activeLevelField = isEnd ? "finalLevel" : "midtermLevel";
                   const activeLevelValue = isEnd ? row.finalLevel : row.midtermLevel;
+                  const isEligible = row.isEligible !== false && row.periodicScore !== null;
 
                   return (
                     <tr
@@ -1922,7 +2278,21 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                         {row.studentCode}
                       </td>
                       <td className="py-2.5 px-3 border-r border-slate-200 bg-slate-50/40 font-semibold text-slate-900">
-                        {row.studentName}
+                        <div>{row.studentName}</div>
+                        <div className="mt-1">
+                          {isEligible ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px] font-bold">
+                              <Check className="w-2.5 h-2.5 text-emerald-600" /> Đủ điều kiện ({row.periodicScore}đ)
+                            </span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-[10px] font-medium"
+                              title={row.sourceExamTitle}
+                            >
+                              <AlertTriangle className="w-2.5 h-2.5 text-amber-600 shrink-0" /> {row.sourceExamTitle}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 text-center font-mono text-slate-700 border-r border-slate-200 bg-slate-50/40 whitespace-nowrap">
                         {row.birthDate}
@@ -1934,7 +2304,7 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                             handleUpdatePeriodicCell(
                               row.studentId,
                               activeLevelField,
-                              e.target.value as "T" | "H" | "C"
+                              e.target.value as "T" | "H" | "C" | ""
                             )
                           }
                           className={`w-full px-2 py-2 text-xs font-bold rounded border focus:outline-none ${
@@ -1942,9 +2312,12 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                               ? "bg-emerald-50 text-emerald-800 border-emerald-300"
                               : activeLevelValue === "H"
                               ? "bg-sky-50 text-sky-900 border-sky-300"
-                              : "bg-amber-50 text-amber-900 border-amber-300"
+                              : activeLevelValue === "C"
+                              ? "bg-amber-50 text-amber-900 border-amber-300"
+                              : "bg-slate-100 text-slate-500 border-slate-300"
                           }`}
                         >
+                          <option value="">-- Chưa đánh giá --</option>
                           <option value="T">T (Hoàn thành tốt)</option>
                           <option value="H">H (Hoàn thành)</option>
                           <option value="C">C (Chưa hoàn thành)</option>
@@ -1956,21 +2329,27 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                           min={0}
                           max={10}
                           step={0.5}
-                          value={row.periodicScore}
+                          value={row.periodicScore !== null && row.periodicScore !== undefined ? row.periodicScore : ""}
+                          placeholder="—"
                           onChange={(e) =>
                             handleUpdatePeriodicCell(
                               row.studentId,
                               "periodicScore",
-                              Number(e.target.value)
+                              e.target.value === "" ? null : Number(e.target.value)
                             )
                           }
-                          className="w-full px-2 py-1.5 text-center font-mono text-sm font-bold text-[#0E6BA8] bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
+                          className={`w-full px-2 py-1.5 text-center font-mono text-sm font-bold border rounded focus:outline-none ${
+                            row.periodicScore !== null
+                              ? "text-[#0E6BA8] bg-white border-slate-300 focus:border-[#0E6BA8]"
+                              : "text-slate-400 bg-slate-50 border-slate-200 placeholder:text-slate-400"
+                          }`}
                         />
                       </td>
                       <td className="p-2 border-r border-slate-200">
                         <input
                           type="text"
                           value={row.commentCode}
+                          placeholder={!isEligible ? "—" : "Mã"}
                           onChange={(e) =>
                             handleUpdatePeriodicCell(
                               row.studentId,
@@ -1978,13 +2357,22 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                               e.target.value
                             )
                           }
-                          className="w-full px-2 py-1.5 text-center font-mono text-xs bg-white border border-slate-300 rounded focus:outline-none focus:border-[#0E6BA8]"
+                          className={`w-full px-2 py-1.5 text-center font-mono text-xs rounded border focus:outline-none ${
+                            !isEligible
+                              ? "bg-slate-50 text-slate-400 border-slate-200 placeholder:text-slate-400"
+                              : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                          }`}
                         />
                       </td>
                       <td className="p-2 border-r border-slate-200">
                         <textarea
                           rows={3}
                           value={row.commentContent}
+                          placeholder={
+                            !isEligible
+                              ? `Chưa đủ điều kiện: ${row.sourceExamTitle} — Không có nhận xét`
+                              : "Nội dung nhận xét môn học..."
+                          }
                           onChange={(e) =>
                             handleUpdatePeriodicCell(
                               row.studentId,
@@ -1992,7 +2380,11 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                               e.target.value
                             )
                           }
-                          className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
+                          className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                            !isEligible
+                              ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                              : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                          }`}
                         />
                       </td>
                       <td className="p-2 border-r border-slate-200 text-center">
@@ -2004,6 +2396,11 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                         <textarea
                           rows={3}
                           value={row.specificCompContent}
+                          placeholder={
+                            !isEligible
+                              ? "Chưa có dữ liệu bài làm — Không có nhận xét"
+                              : "Nhận xét năng lực đặc thù..."
+                          }
                           onChange={(e) =>
                             handleUpdatePeriodicCell(
                               row.studentId,
@@ -2011,13 +2408,22 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                               e.target.value
                             )
                           }
-                          className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
+                          className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                            !isEligible
+                              ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                              : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                          }`}
                         />
                       </td>
                       <td className="p-2">
                         <textarea
                           rows={3}
                           value={row.qualityContent}
+                          placeholder={
+                            !isEligible
+                              ? "Chưa có dữ liệu bài làm — Không có nhận xét"
+                              : "Nhận xét phẩm chất chủ yếu..."
+                          }
                           onChange={(e) =>
                             handleUpdatePeriodicCell(
                               row.studentId,
@@ -2025,7 +2431,11 @@ export const Circular27AssessmentView: React.FC<Circular27AssessmentViewProps> =
                               e.target.value
                             )
                           }
-                          className="w-full p-2 text-xs bg-white border border-slate-300 rounded leading-relaxed focus:outline-none focus:border-[#0E6BA8]"
+                          className={`w-full p-2 text-xs rounded leading-relaxed border focus:outline-none ${
+                            !isEligible
+                              ? "bg-slate-50/70 text-slate-500 border-slate-200 placeholder:text-slate-400 placeholder:italic"
+                              : "bg-white text-slate-900 border-slate-300 focus:border-[#0E6BA8]"
+                          }`}
                         />
                       </td>
                     </tr>

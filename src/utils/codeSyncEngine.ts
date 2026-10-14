@@ -1,6 +1,7 @@
 import { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
 import { syncEntireStateToFirestore } from "../services/firebaseService";
+import { syncSystemDataToGoogleDrive } from "./googleDriveService";
 
 export interface OperationLogEntry {
   id: string;
@@ -496,6 +497,21 @@ export async function syncStateToCodebase(
     deletedIds: mergedLocal.deletedIds,
   }).catch((err) => {
     console.warn("Lỗi đồng bộ Firebase:", err);
+  });
+
+  // Tự động sao lưu và đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh lên Google Drive chia sẻ (0đ phí)
+  syncSystemDataToGoogleDrive({
+    ...payload,
+    classes: mergedLocal.classes,
+    assignments: mergedLocal.assignments,
+    submissions: mergedLocal.submissions,
+    tt27RegularRecords: mergedLocal.tt27RegularRecords,
+    tt27PeriodicRecords: mergedLocal.tt27PeriodicRecords,
+    operationHistory: mergedLocal.operationHistory,
+    examBuilderDraft: mergedLocal.examBuilderDraft,
+    deletedIds: mergedLocal.deletedIds,
+  }).catch((err) => {
+    console.warn("Lỗi đồng bộ Google Drive:", err);
   });
 
   try {
