@@ -1888,6 +1888,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
           };
 
           setGeneratedAssignment(newAsg);
+          onAddAssignment(newAsg);
           success = true;
         } else if (!isPracticeGeneration) {
           const res = await fetch("/api/ai/generate-exam", {
@@ -2011,6 +2012,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
           };
 
           setGeneratedAssignment(newAsg);
+          onAddAssignment(newAsg);
           success = true;
         } else {
           const res = await fetch("/api/ai/generate-rubric", {
@@ -2075,6 +2077,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
           };
 
           setGeneratedAssignment(newAsg);
+          onAddAssignment(newAsg);
           success = true;
         }
       } catch {
@@ -2134,6 +2137,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               theoryExam: enrichedFallbackSem,
             };
             setGeneratedAssignment(fallbackSemAsg);
+            onAddAssignment(fallbackSemAsg);
           } else if (!isPracticeGeneration) {
             const monthlyOrTheoryTitle =
               builderMode === "monthly"
@@ -2186,6 +2190,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               theoryExam: fallbackExam,
             };
             setGeneratedAssignment(fallbackAsg);
+            onAddAssignment(fallbackAsg);
           } else {
             const targetClsList =
               selectedClassNames.length > 0 ? selectedClassNames : [className];
@@ -2203,10 +2208,12 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
               activeTopicObj,
               selectedSubtrackId
             );
-            setGeneratedAssignment({
+            const assignedPractice = {
               ...fallbackPractice,
               targetClassNames: targetClsList,
-            });
+            };
+            setGeneratedAssignment(assignedPractice);
+            onAddAssignment(assignedPractice);
           }
           setErrorMsg(
             `Đã biên soạn Đề kiểm tra bám sát 100% chương trình ${grade} (Bước 1) và nội dung "${selectedTopicsTitleSummary}" đã chọn ở Bước 3${
@@ -2232,11 +2239,15 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
   const syncTheoryExamAndChecklist = (updatedExam: TheoryExam) => {
     if (!generatedAssignment) return;
-    setGeneratedAssignment({
+    const nextAsg: Assignment = {
       ...generatedAssignment,
       theoryExam: updatedExam,
       checklist: buildTheoryChecklistFromExam(updatedExam),
-    });
+    };
+    setGeneratedAssignment(nextAsg);
+    if (assignments.some((a) => a.id === nextAsg.id)) {
+      onAddAssignment(nextAsg);
+    }
   };
 
   const handleAddMoreTheoryQuestion = () => {
@@ -3005,6 +3016,39 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
   };
 
+  /**
+   * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Trắc nghiệm)
+   * Nhận vào nội dung gợi ý/mô tả tạo ảnh và vẽ lại hình ảnh phù hợp nhất với câu hỏi
+   */
+  const handleRegenerateMcqIllustrationFromPrompt = (qIdx: number, customPrompt?: string) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const targetQ = exam.multipleChoice[qIdx];
+    if (!targetQ) return;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetQ.illustrationNote || "").trim() || targetQ.question;
+    const nextVariant = ((targetQ.illustrationVariant ?? 0) + 1) % 5;
+    const cleanNote = cleanIllustrationCaption(promptText, targetQ.question);
+    const nextDataUrl = generateIllustrationDataUrl(
+      targetQ.question,
+      cleanNote,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextMcqs = exam.multipleChoice.map((q, idx) =>
+      idx === qIdx
+        ? {
+            ...q,
+            illustrationNote: cleanNote,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
+          }
+        : q
+    );
+    syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+    setSavedNotice(`Đã tạo lại ảnh minh họa cho Câu ${qIdx + 1} theo gợi ý: "${cleanNote}"!`);
+  };
+
   const handleCycleEssayIllustration = (eIdx: number) => {
     if (!generatedAssignment?.theoryExam) return;
     const exam = generatedAssignment.theoryExam;
@@ -3092,6 +3136,43 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       shortAnswers: nextEssays,
       shortAnswer: nextEssays[0] || exam.shortAnswer,
     });
+  };
+
+  /**
+   * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Tự luận)
+   */
+  const handleRegenerateEssayIllustrationFromPrompt = (eIdx: number, customPrompt?: string) => {
+    if (!generatedAssignment?.theoryExam) return;
+    const exam = generatedAssignment.theoryExam;
+    const currentEssays = getActiveShortAnswers(exam);
+    const targetEq = currentEssays[eIdx];
+    if (!targetEq) return;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetEq.illustrationNote || "").trim() || targetEq.question;
+    const nextVariant = ((targetEq.illustrationVariant ?? 0) + 1) % 5;
+    const cleanNote = cleanIllustrationCaption(promptText, targetEq.question);
+    const nextDataUrl = generateIllustrationDataUrl(
+      targetEq.question,
+      cleanNote,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextEssays = currentEssays.map((eq, idx) =>
+      idx === eIdx
+        ? {
+            ...eq,
+            illustrationNote: cleanNote,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
+          }
+        : eq
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      shortAnswers: nextEssays,
+      shortAnswer: nextEssays[0] || exam.shortAnswer,
+    });
+    setSavedNotice(`Đã tạo lại ảnh minh họa cho Câu Tự luận ${eIdx + 1} theo gợi ý: "${cleanNote}"!`);
   };
 
   const handleUploadEssayCustomImage = (
@@ -3218,6 +3299,45 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         practiceTasks: nextTasks,
       },
     });
+  };
+
+  /**
+   * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Thực hành)
+   */
+  const handleRegeneratePracticeIllustrationFromPrompt = (pIdx: number, customPrompt?: string) => {
+    if (!generatedAssignment?.theoryExam?.semesterBlueprint) return;
+    const exam = generatedAssignment.theoryExam;
+    const bp = exam.semesterBlueprint!;
+    const targetPt = bp.practiceTasks[pIdx];
+    if (!targetPt) return;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetPt.illustrationNote || "").trim() || `${targetPt.title} ${targetPt.instructions}`;
+    const nextVariant = ((targetPt.illustrationVariant ?? 0) + 1) % 5;
+    const cleanNote = cleanIllustrationCaption(promptText, targetPt.title);
+    const nextDataUrl = generateIllustrationDataUrl(
+      `${targetPt.title} ${targetPt.instructions}`,
+      cleanNote,
+      nextVariant,
+      generatedAssignment.grade
+    );
+    const nextTasks = bp.practiceTasks.map((pt, idx) =>
+      idx === pIdx
+        ? {
+            ...pt,
+            illustrationNote: cleanNote,
+            illustrationVariant: nextVariant,
+            illustrationImageDataUrl: nextDataUrl,
+            hasNoIllustration: false,
+          }
+        : pt
+    );
+    syncTheoryExamAndChecklist({
+      ...exam,
+      semesterBlueprint: {
+        ...bp,
+        practiceTasks: nextTasks,
+      },
+    });
+    setSavedNotice(`Đã tạo lại ảnh minh họa cho Bài thực hành ${pIdx + 1} theo gợi ý: "${cleanNote}"!`);
   };
 
   const handleUploadPracticeCustomImage = (
@@ -4779,34 +4899,50 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             </div>
                           )}
 
-                          {!q.hasNoIllustration && q.illustrationImageDataUrl && (
-                            <input
-                              type="text"
-                              value={q.illustrationNote || ""}
-                              onChange={(e) => {
-                                const nextNote = e.target.value;
-                                const exam = generatedAssignment.theoryExam!;
-                                const nextDataUrl = generateIllustrationDataUrl(
-                                  q.question,
-                                  nextNote,
-                                  q.illustrationVariant ?? 0,
-                                  generatedAssignment.grade
-                                );
-                                const nextMcqs = exam.multipleChoice.map((item, qI) =>
-                                  qI === idx
-                                    ? {
-                                        ...item,
-                                        illustrationNote: nextNote,
-                                        illustrationImageDataUrl: nextDataUrl,
-                                      }
-                                    : item
-                                );
-                                syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
-                              }}
-                              placeholder="Mô tả nội dung hình minh họa (hệ thống tự động vẽ lại theo mô tả)..."
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900 focus:outline-none focus:border-[#0284C7]"
-                            />
-                          )}
+                          {/* VÙNG GỢI Ý TẠO ẢNH & NÚT LỆNH TẠO LẠI ẢNH THEO GỢI Ý */}
+                          <div className="space-y-1.5 pt-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="text-[11px] font-bold text-sky-950 flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5 text-[#0284C7]" />
+                                <span>Gợi ý nội dung tạo ảnh minh họa cho câu hỏi:</span>
+                              </label>
+                              <span className="text-[10px] text-slate-500 hidden sm:inline">
+                                Gõ mô tả và bấm nút để hệ thống tự động vẽ lại hình phù hợp
+                              </span>
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              <input
+                                type="text"
+                                value={q.illustrationNote || ""}
+                                onChange={(e) => {
+                                  const nextNote = e.target.value;
+                                  const exam = generatedAssignment.theoryExam!;
+                                  const nextMcqs = exam.multipleChoice.map((item, qI) =>
+                                    qI === idx ? { ...item, illustrationNote: nextNote } : item
+                                  );
+                                  syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleRegenerateMcqIllustrationFromPrompt(idx);
+                                  }
+                                }}
+                                placeholder="Nhập hoặc dán gợi ý tạo ảnh (VD: thao tác nháy đúp chuột, hàng phím cơ sở phím F và J, vẽ hình trong Paint...)"
+                                className="w-full px-3 py-2 text-xs bg-white border border-sky-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0284C7]/20 focus:border-[#0284C7] shadow-2xs font-medium"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateMcqIllustrationFromPrompt(idx)}
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                title="Bấm để tạo lại hình ảnh minh họa phù hợp với gợi ý vừa nhập"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>Tạo lại ảnh theo gợi ý</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
 
                         <div className="space-y-1.5">
@@ -5068,39 +5204,55 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             </div>
                           )}
 
-                          {!sa.hasNoIllustration && sa.illustrationImageDataUrl && (
-                            <input
-                              type="text"
-                              value={sa.illustrationNote || ""}
-                              onChange={(e) => {
-                                const nextNote = e.target.value;
-                                const exam = generatedAssignment.theoryExam!;
-                                const nextDataUrl = generateIllustrationDataUrl(
-                                  sa.question,
-                                  nextNote,
-                                  sa.illustrationVariant ?? 0,
-                                  generatedAssignment.grade
-                                );
-                                const currentEssays = getActiveShortAnswers(exam);
-                                const nextEssays = currentEssays.map((item, eI) =>
-                                  eI === sIdx
-                                    ? {
-                                        ...item,
-                                        illustrationNote: nextNote,
-                                        illustrationImageDataUrl: nextDataUrl,
-                                      }
-                                    : item
-                                );
-                                syncTheoryExamAndChecklist({
-                                  ...exam,
-                                  shortAnswers: nextEssays,
-                                  shortAnswer: nextEssays[0] || exam.shortAnswer,
-                                });
-                              }}
-                              placeholder="Mô tả hình ảnh minh họa..."
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-sky-200 rounded-lg text-sky-900"
-                            />
-                          )}
+                          {/* VÙNG GỢI Ý TẠO ẢNH & NÚT LỆNH TẠO LẠI ẢNH THEO GỢI Ý (TỰ LUẬN) */}
+                          <div className="space-y-1.5 pt-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="text-[11px] font-bold text-sky-950 flex items-center gap-1.5">
+                                <Sparkles className="w-3.5 h-3.5 text-[#0284C7]" />
+                                <span>Gợi ý nội dung tạo ảnh minh họa cho câu tự luận:</span>
+                              </label>
+                              <span className="text-[10px] text-slate-500 hidden sm:inline">
+                                Gõ mô tả và bấm nút để hệ thống tự động vẽ lại hình phù hợp
+                              </span>
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              <input
+                                type="text"
+                                value={sa.illustrationNote || ""}
+                                onChange={(e) => {
+                                  const nextNote = e.target.value;
+                                  const exam = generatedAssignment.theoryExam!;
+                                  const currentEssays = getActiveShortAnswers(exam);
+                                  const nextEssays = currentEssays.map((item, eI) =>
+                                    eI === sIdx ? { ...item, illustrationNote: nextNote } : item
+                                  );
+                                  syncTheoryExamAndChecklist({
+                                    ...exam,
+                                    shortAnswers: nextEssays,
+                                    shortAnswer: nextEssays[0] || exam.shortAnswer,
+                                  });
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    handleRegenerateEssayIllustrationFromPrompt(sIdx);
+                                  }
+                                }}
+                                placeholder="Nhập gợi ý tạo ảnh (VD: các bộ phận máy tính, tư thế ngồi học đúng, thư mục tệp...)"
+                                className="w-full px-3 py-2 text-xs bg-white border border-sky-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#0284C7]/20 focus:border-[#0284C7] shadow-2xs font-medium"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateEssayIllustrationFromPrompt(sIdx)}
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                title="Bấm để tạo lại hình ảnh minh họa phù hợp với gợi ý vừa nhập"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>Tạo lại ảnh theo gợi ý</span>
+                              </button>
+                            </div>
+                          </div>
                         </div>
 
                         <div>
@@ -5352,20 +5504,49 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                               </div>
                             )}
 
-                            {!pt.hasNoIllustration && pt.illustrationImageDataUrl && (
-                              <input
-                                type="text"
-                                value={pt.illustrationNote || ""}
-                                onChange={(e) =>
-                                  handleUpdateSemesterPracticeTask(
-                                    pIdx,
-                                    "illustrationNote",
-                                    e.target.value
-                                  )
-                                }
-                                className="w-full px-3 py-1.5 text-xs bg-white border border-emerald-200 rounded-lg text-emerald-900"
-                              />
-                            )}
+                            {/* VÙNG GỢI Ý TẠO ẢNH & NÚT LỆNH TẠO LẠI ẢNH THEO GỢI Ý (THỰC HÀNH) */}
+                            <div className="space-y-1.5 pt-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <label className="text-[11px] font-bold text-emerald-950 flex items-center gap-1.5">
+                                  <Sparkles className="w-3.5 h-3.5 text-emerald-700" />
+                                  <span>Gợi ý nội dung tạo ảnh minh họa cho bài thực hành:</span>
+                                </label>
+                                <span className="text-[10px] text-slate-500 hidden sm:inline">
+                                  Gõ mô tả bài tập thực hành và bấm nút để hệ thống tự động vẽ lại hình
+                                </span>
+                              </div>
+
+                              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={pt.illustrationNote || ""}
+                                  onChange={(e) =>
+                                    handleUpdateSemesterPracticeTask(
+                                      pIdx,
+                                      "illustrationNote",
+                                      e.target.value
+                                    )
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") {
+                                      e.preventDefault();
+                                      handleRegeneratePracticeIllustrationFromPrompt(pIdx);
+                                    }
+                                  }}
+                                  placeholder="Nhập gợi ý tạo ảnh thực hành (VD: vẽ hình ngôi nhà trong Paint, bảng tính Excel, giao diện Scratch...)"
+                                  className="w-full px-3 py-2 text-xs bg-white border border-emerald-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 shadow-2xs font-medium"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleRegeneratePracticeIllustrationFromPrompt(pIdx)}
+                                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                  title="Bấm để tạo lại hình ảnh minh họa bài thực hành phù hợp với gợi ý vừa nhập"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                  <span>Tạo lại ảnh theo gợi ý</span>
+                                </button>
+                              </div>
+                            </div>
                           </div>
 
                           <div>

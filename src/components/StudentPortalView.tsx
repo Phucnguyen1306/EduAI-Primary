@@ -71,6 +71,7 @@ interface StudentPortalViewProps {
   onInspectSubmissionReadOnly: (submission: StudentSubmission) => void;
   activeSubTab?: "do_work" | "view_results";
   onChangeSubTab?: (tab: "do_work" | "view_results") => void;
+  onRefreshData?: () => Promise<void>;
 }
 
 export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
@@ -81,6 +82,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   onInspectSubmissionReadOnly,
   activeSubTab,
   onChangeSubTab,
+  onRefreshData,
 }) => {
   const [internalSubTab, setInternalSubTab] = useState<"do_work" | "view_results">("do_work");
   const currentSubTab = activeSubTab || internalSubTab;
@@ -139,7 +141,12 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   const handleSyncFromTeacher = async () => {
     setIsSyncingFromTeacher(true);
     try {
+      if (onRefreshData) {
+        await onRefreshData();
+      }
       await requestPeerSync();
+    } catch (err) {
+      console.warn("Lỗi nhận đề từ Thầy:", err);
     } finally {
       setTimeout(() => setIsSyncingFromTeacher(false), 800);
     }
@@ -1076,16 +1083,103 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
             </div>
           )}
         </div>
-      ) : !currentClass || !currentStudent ? (
-        /* Khi học sinh chưa chọn đủ Lớp và Tên học sinh -> Giữ trống vùng bài tập, nhắc học sinh chọn Lớp & Tên trước */
-        <div className="bg-white border-2 border-dashed border-slate-300 rounded-2xl p-10 text-center space-y-2">
-          <School className="w-8 h-8 text-[#0284C7] mx-auto" />
-          <p className="text-base font-bold text-slate-800">
-            Em vui lòng chọn Lớp học và chọn Tên của em ở phía trên để bắt đầu làm bài nhé!
-          </p>
+      ) : !currentClass ? (
+        /* Khi học sinh chưa chọn Lớp -> Hiển thị màn hình chào mừng & danh sách các lớp để bấm chọn nhanh kèm tổng quan đề */
+        <div className="space-y-6">
+          <div className="bg-white border-2 border-dashed border-[#0284C7]/40 rounded-2xl p-8 text-center space-y-4 shadow-xs">
+            <School className="w-10 h-10 text-[#0284C7] mx-auto" />
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-900">
+                Chào mừng em đến với Cổng Làm Bài Trực Tuyến Môn Tin Học!
+              </h3>
+              <p className="text-sm text-slate-600 max-w-xl mx-auto">
+                Em hãy bấm chọn lớp học của mình ở phía dưới hoặc chọn ở ô <strong>1. Chọn Lớp học</strong> phía trên để xem các bài tập Thầy/Cô đã giao nhé!
+              </p>
+            </div>
+
+            {/* Nút chọn nhanh Lớp học */}
+            <div className="pt-2">
+              <span className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Bấm chọn nhanh lớp của em:
+              </span>
+              <div className="flex flex-wrap items-center justify-center gap-2 max-w-2xl mx-auto">
+                {classes.map((cls) => (
+                  <button
+                    key={cls.id}
+                    type="button"
+                    onClick={() => handleClassChange(cls.id)}
+                    className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-50 hover:bg-sky-50 hover:text-[#0284C7] hover:border-[#0284C7] border border-slate-200 rounded-xl transition-all cursor-pointer shadow-2xs"
+                  >
+                    {cls.name} ({cls.grade})
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={handleSyncFromTeacher}
+                disabled={isSyncingFromTeacher}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-xl transition-colors cursor-pointer shadow-xs"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFromTeacher ? "animate-spin" : ""}`} />
+                <span>{isSyncingFromTeacher ? "Đang cập nhật..." : "Đồng bộ đề mới từ Thầy (Realtime Cloud)"}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Danh sách đề kiểm tra đã giao trong hệ thống để học sinh & giáo viên kiểm tra ngay */}
+          {assignments.length > 0 && (
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-[#0284C7]" />
+                  <span>Các đề kiểm tra đã phát trong hệ thống ({assignments.length} đề):</span>
+                </h4>
+                <span className="text-xs text-slate-500">
+                  Bấm vào đề để tự động chuyển đến lớp tương ứng
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {assignments.map((asg) => (
+                  <div
+                    key={asg.id}
+                    onClick={() => {
+                      const targetClass = classes.find((c) =>
+                        isAssignmentForClass(asg, c.name, c.grade)
+                      );
+                      if (targetClass) {
+                        handleClassChange(targetClass.id);
+                        setSelectedAssignmentId(asg.id);
+                      }
+                    }}
+                    className="p-3.5 bg-white border border-slate-200 hover:border-[#0284C7] rounded-xl shadow-2xs transition-all cursor-pointer space-y-2 group"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="px-2 py-0.5 text-[10px] font-bold text-[#0284C7] bg-sky-50 rounded-md">
+                        {asg.grade}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500">
+                        .{asg.fileType}
+                      </span>
+                    </div>
+                    <h5 className="text-xs font-bold text-slate-900 line-clamp-2 group-hover:text-[#0284C7]">
+                      {asg.title}
+                    </h5>
+                    <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                      <span>Lớp nhận: <strong>{asg.className}</strong></span>
+                      <span className="text-[#0284C7] font-semibold text-[10px]">Vào làm bài →</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
-        /* TAB 1 DÀNH CHO HỌC SINH: LÀM BÀI & NỘP BÀI (Chỉ hiển thị sau khi đã chọn Lớp và Tên học sinh) */
+        /* TAB 1 DÀNH CHO HỌC SINH: LÀM BÀI & NỘP BÀI (Hiển thị ngay khi đã chọn Lớp học) */
         <>
           {/* Step 3: Assignment Picker for this Class Grade */}
           <div className="space-y-3">
@@ -1176,6 +1270,19 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* Nhắc chọn tên học sinh nếu đã chọn lớp nhưng chưa chọn tên học sinh */}
+          {currentClass && !currentStudent && (
+            <div className="bg-sky-50 border-2 border-dashed border-[#0284C7]/50 rounded-2xl p-6 text-center space-y-3 shadow-xs">
+              <School className="w-8 h-8 text-[#0284C7] mx-auto animate-bounce" />
+              <h4 className="text-base font-bold text-slate-900">
+                Em đã chọn lớp {currentClass.name} ({currentClass.grade})
+              </h4>
+              <p className="text-sm text-slate-700 max-w-lg mx-auto">
+                Lớp của em có <strong>{classAssignments.length} đề bài</strong> được giao. Em vui lòng chọn <strong>Tên học sinh của em</strong> ở ô số <strong>2. Chọn Tên Học sinh</strong> phía trên để mở đề và bắt đầu làm bài nhé!
+              </p>
+            </div>
+          )}
 
           {/* Step 4: Do Exercise or Upload File from System */}
           {selectedAssignment && currentStudent && currentClass && (

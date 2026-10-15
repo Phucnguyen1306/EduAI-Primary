@@ -54,7 +54,7 @@ export function cleanIllustrationCaption(
   const source = rawNote && String(rawNote).trim() ? rawNote : fallbackText || "";
   if (!source) return "";
   return String(source)
-    .replace(/^\[?\s*HÌNH\s*ẢNH\s*MINH\s*HỌA\s*[:.-]?\s*/i, "")
+    .replace(/^\[?\s*(HÌNH\s*ẢNH\s*MINH\s*HỌA|GỢI\s*Ý\s*(TẠO\s*ẢNH)?|MÔ\s*TẢ\s*(HÌNH\s*ẢNH)?|PROMPT|IMAGE)\s*[:.-]?\s*/i, "")
     .replace(/\]\s*$/, "")
     .trim();
 }
@@ -150,8 +150,9 @@ export function generateIllustrationDataUrl(
   const norm = String(combinedText || "").toLowerCase();
   const v = Math.abs(Math.floor(variantIndex || 0));
   const theme = PALETTES[v % PALETTES.length];
+  // Ưu tiên nội dung gợi ý/mô tả của giáo viên trước, nếu không có mới dùng câu hỏi
   const caption =
-    cleanIllustrationCaption(contextText, secondaryText) ||
+    cleanIllustrationCaption(secondaryText, contextText) ||
     "Hình minh họa câu hỏi Tin học";
   const shortCaption =
     caption.length > 78 ? caption.slice(0, 75).trim() + "..." : caption;
@@ -169,31 +170,37 @@ export function generateIllustrationDataUrl(
     | "scratch_blocks"
     | "safety_copyright"
     | "info_types"
+    | "paint_drawing"
+    | "hardware_devices"
     | "shutdown_power";
 
   let detectedScene: SceneType = "desktop_pc";
 
-  if (/hàng phím|phím f|phím j|bàn phím|10 ngón|gõ phím|caps lock|shift/.test(norm)) {
+  if (/vẽ|paint|bút chì|tẩy|tô màu|hình tròn|hình tam giác|màu vẽ|cọ vẽ|brush|canvas/.test(norm)) {
+    detectedScene = "paint_drawing";
+  } else if (/loa|tai nghe|máy in|webcam|bộ nhớ|ổ cứng|thiết bị vào|thiết bị ra|cpu|máy chiếu/.test(norm)) {
+    detectedScene = "hardware_devices";
+  } else if (/hàng phím|phím f|phím j|bàn phím|10 ngón|gõ phím|caps lock|shift|phím cách|spacebar|enter|backspace|delete|mũi tên|ngón tay/.test(norm)) {
     detectedScene = "keyboard_fj";
-  } else if (/tư thế ngồi|50\s*cm|80\s*cm|khoảng cách từ mắt|bảo vệ mắt/.test(norm)) {
+  } else if (/tư thế ngồi|50\s*cm|80\s*cm|khoảng cách từ mắt|bảo vệ mắt|ngồi thẳng|chiều cao bàn/.test(norm)) {
     detectedScene = "posture";
-  } else if (/thao tác chuột|nháy đúp|con trỏ chuột|nút trái|nút phải|cầm chuột/.test(norm)) {
+  } else if (/thao tác chuột|nháy đúp|con trỏ chuột|nút trái|nút phải|cầm chuột|chuột máy tính|lăn chuột|kéo thả/.test(norm)) {
     detectedScene = "mouse_actions";
-  } else if (/scratch|lá cờ xanh|khối lệnh|nhân vật|repeat|forever|biến|chú mèo/.test(norm)) {
+  } else if (/scratch|lá cờ xanh|khối lệnh|nhân vật|repeat|forever|biến|chú mèo|lập trình|sân khấu|sprite/.test(norm)) {
     detectedScene = "scratch_blocks";
-  } else if (/powerpoint|trang chiếu|trình chiếu|slide|transition|f5/.test(norm)) {
+  } else if (/powerpoint|trang chiếu|trình chiếu|slide|transition|f5|hiệu ứng|animation/.test(norm)) {
     detectedScene = "powerpoint_slide";
-  } else if (/word|soạn thảo|in đậm|căn giữa|căn đều|phông chữ|cỡ chữ|telex|vni/.test(norm)) {
+  } else if (/word|soạn thảo|in đậm|căn giữa|căn đều|phông chữ|cỡ chữ|telex|vni|chèn bảng|table|insert|văn bản|save|lưu tệp/.test(norm)) {
     detectedScene = "word_editor";
-  } else if (/thư mục|folder|cây thư mục|tệp|sao chép|di chuyển|đổi tên|file explorer/.test(norm)) {
+  } else if (/thư mục|folder|cây thư mục|tệp|sao chép|di chuyển|đổi tên|file explorer|ổ đĩa|usb/.test(norm)) {
     detectedScene = "folder_tree";
-  } else if (/trình duyệt|chrome|edge|cốc cốc|internet|trang web|thời tiết|từ khóa|siêu liên kết/.test(norm)) {
+  } else if (/trình duyệt|chrome|edge|cốc cốc|internet|trang web|thời tiết|từ khóa|siêu liên kết|google|mạng/.test(norm)) {
     detectedScene = "browser_internet";
-  } else if (/thông tin cá nhân|mật khẩu|bản quyền|tác giả|an toàn|người lạ/.test(norm)) {
+  } else if (/thông tin cá nhân|mật khẩu|bản quyền|tác giả|an toàn|người lạ|bảo mật|virus|lừa đảo/.test(norm)) {
     detectedScene = "safety_copyright";
-  } else if (/3 dạng thông tin|dạng chữ|dạng âm thanh|đèn tín hiệu|thông tin và quyết định/.test(norm)) {
+  } else if (/3 dạng thông tin|dạng chữ|dạng âm thanh|đèn tín hiệu|thông tin và quyết định|vật mang tin|thu nhận thông tin/.test(norm)) {
     detectedScene = "info_types";
-  } else if (/shut down|tắt máy|nút nguồn|power/.test(norm)) {
+  } else if (/shut down|tắt máy|nút nguồn|power|khởi động lại|restart/.test(norm)) {
     detectedScene = "shutdown_power";
   } else {
     detectedScene = "desktop_pc";
@@ -202,6 +209,8 @@ export function generateIllustrationDataUrl(
   // Nếu giáo viên bấm "Đổi hình khác" nhiều lần (v >= 5), cho phép chuyển sang các mẫu biểu đồ/giao diện khác nhau
   const allScenes: SceneType[] = [
     detectedScene,
+    "paint_drawing",
+    "hardware_devices",
     "desktop_pc",
     "keyboard_fj",
     "browser_internet",
@@ -218,7 +227,83 @@ export function generateIllustrationDataUrl(
 
   let centerArt = "";
 
-  if (activeScene === "desktop_pc") {
+  if (activeScene === "paint_drawing") {
+    centerArt = `
+      <!-- Khung vẽ Paint -->
+      <rect x="55" y="32" width="470" height="196" rx="10" fill="#FFFFFF" stroke="#0284C7" stroke-width="2.5"/>
+      <rect x="55" y="32" width="470" height="34" rx="10" fill="#F0F9FF" stroke="#BAE6FD" stroke-width="1.5"/>
+      <!-- Thanh công cụ vẽ: Bút chì, Tẩy, Thùng sơn, Hình khối -->
+      <g transform="translate(70, 38)">
+        <rect x="0" y="0" width="22" height="22" rx="4" fill="#0284C7"/>
+        <text x="11" y="16" text-anchor="middle" font-size="13">✏️</text>
+        <rect x="30" y="0" width="22" height="22" rx="4" fill="#E2E8F0"/>
+        <text x="41" y="16" text-anchor="middle" font-size="13">🧹</text>
+        <rect x="60" y="0" width="22" height="22" rx="4" fill="#E2E8F0"/>
+        <text x="71" y="16" text-anchor="middle" font-size="13">🪣</text>
+        <rect x="90" y="0" width="22" height="22" rx="4" fill="#E2E8F0"/>
+        <text x="101" y="16" text-anchor="middle" font-size="13">🔍</text>
+        <!-- Khối hình Shapes -->
+        <circle cx="132" cy="11" r="8" fill="none" stroke="#EA580C" stroke-width="2"/>
+        <rect x="148" y="3" width="16" height="16" fill="none" stroke="#16A34A" stroke-width="2"/>
+        <polygon points="178,3 186,19 170,19" fill="none" stroke="#2563EB" stroke-width="2"/>
+        <!-- Bảng màu Color Palette -->
+        <circle cx="215" cy="11" r="6" fill="#DC2626"/>
+        <circle cx="230" cy="11" r="6" fill="#EA580C"/>
+        <circle cx="245" cy="11" r="6" fill="#EAB308"/>
+        <circle cx="260" cy="11" r="6" fill="#16A34A"/>
+        <circle cx="275" cy="11" r="6" fill="#0284C7"/>
+        <circle cx="290" cy="11" r="6" fill="#7C3AED"/>
+      </g>
+      <!-- Hình vẽ mẫu bên trong canvas: Ngôi nhà + Cây xanh + Mặt trời -->
+      <circle cx="450" cy="95" r="20" fill="#F59E0B" stroke="#D97706" stroke-width="2"/>
+      <!-- Ngôi nhà -->
+      <polygon points="230,105 280,70 330,105" fill="#EF4444" stroke="#B91C1C" stroke-width="2.5"/>
+      <rect x="240" y="105" width="80" height="70" fill="#FEF08A" stroke="#CA8A04" stroke-width="2.5"/>
+      <rect x="270" y="135" width="20" height="40" fill="#78350F"/>
+      <rect x="248" y="115" width="16" height="16" fill="#93C5FD" stroke="#1E40AF" stroke-width="1.5"/>
+      <!-- Cây xanh -->
+      <rect x="145" y="130" width="14" height="45" fill="#78350F"/>
+      <circle cx="152" cy="115" r="24" fill="#22C55E" stroke="#15803D" stroke-width="2"/>
+      <text x="290" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#0284C7">PHẦN MỀM TẬP VẼ HÌNH ĐƠN GIẢN (PAINT)</text>
+    `;
+  } else if (activeScene === "hardware_devices") {
+    centerArt = `
+      <!-- Các bộ phận & thiết bị máy tính -->
+      <rect x="55" y="36" width="110" height="85" rx="8" fill="#1E293B" stroke="#0F172A" stroke-width="2.5"/>
+      <rect x="63" y="44" width="94" height="64" rx="4" fill="#38BDF8"/>
+      <text x="110" y="140" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#1E293B">1. Màn hình (Ra)</text>
+
+      <rect x="195" y="36" width="90" height="85" rx="8" fill="#F8FAFC" stroke="#475569" stroke-width="2.5"/>
+      <line x1="240" y1="36" x2="240" y2="70" stroke="#475569" stroke-width="2"/>
+      <rect x="238" y="50" width="4" height="10" rx="2" fill="#0284C7"/>
+      <text x="240" y="140" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#1E293B">2. Chuột (Vào)</text>
+
+      <rect x="315" y="42" width="115" height="75" rx="8" fill="#E2E8F0" stroke="#334155" stroke-width="2.5"/>
+      <rect x="323" y="50" width="99" height="42" rx="3" fill="#64748B"/>
+      <text x="372" y="140" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#1E293B">3. Bàn phím (Vào)</text>
+
+      <rect x="455" y="36" width="70" height="85" rx="6" fill="#334155" stroke="#0F172A" stroke-width="2.5"/>
+      <circle cx="490" cy="65" r="12" fill="#0284C7"/>
+      <text x="490" y="140" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="bold" fill="#1E293B">4. Thân máy</text>
+
+      <!-- Hàng dưới: Loa, Tai nghe, Máy in -->
+      <g transform="translate(110, 160)">
+        <rect x="0" y="0" width="75" height="50" rx="6" fill="#F1F5F9" stroke="#64748B" stroke-width="2"/>
+        <text x="37" y="28" text-anchor="middle" font-size="18">🔊</text>
+        <text x="37" y="44" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#475569">Loa (Ra)</text>
+      </g>
+      <g transform="translate(250, 160)">
+        <rect x="0" y="0" width="75" height="50" rx="6" fill="#F1F5F9" stroke="#64748B" stroke-width="2"/>
+        <text x="37" y="28" text-anchor="middle" font-size="18">🎧</text>
+        <text x="37" y="44" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#475569">Tai nghe (Ra)</text>
+      </g>
+      <g transform="translate(390, 160)">
+        <rect x="0" y="0" width="75" height="50" rx="6" fill="#F1F5F9" stroke="#64748B" stroke-width="2"/>
+        <text x="37" y="28" text-anchor="middle" font-size="18">🖨️</text>
+        <text x="37" y="44" text-anchor="middle" font-family="Arial, sans-serif" font-size="9" font-weight="bold" fill="#475569">Máy in (Ra)</text>
+      </g>
+    `;
+  } else if (activeScene === "desktop_pc") {
     const showNumbers = v % 2 === 0;
     centerArt = `
       <!-- Màn hình (1) -->
@@ -708,98 +793,80 @@ export function isAssignmentAssignedToClass(
 
   const cNameTrimmed = String(className || "").trim();
   const cNameLower = cNameTrimmed.toLowerCase();
+  const cleanStudentClass = cNameLower.replace(/^(lớp|khối)\s*/i, "").trim();
+
   const rawClassStr = String(assignment.className || "").trim();
   const rawClassLower = rawClassStr.toLowerCase();
 
   const targetNames = Array.isArray(assignment.targetClassNames)
-    ? assignment.targetClassNames.map((s) => String(s || "").trim())
+    ? assignment.targetClassNames.map((s) => String(s || "").trim()).filter(Boolean)
     : [];
 
-  const cleanC = cNameLower.replace(/^(lớp|khối)\s+/i, "").trim();
-
   // 1. Nếu đề bài giao cho toàn khối, tất cả lớp hoặc không chỉ định lớp riêng
-  if (
+  const isAllGradeTarget =
     !rawClassStr ||
+    rawClassLower === asgGrade.toLowerCase() ||
+    rawClassLower === targetGrade.toLowerCase() ||
+    rawClassLower === `lớp ${asgGradeNum}` ||
+    rawClassLower === `khối ${asgGradeNum}` ||
     rawClassLower.includes("tất cả") ||
     rawClassLower.includes("cả khối") ||
     rawClassLower.includes("toàn khối") ||
-    rawClassLower.includes("chung") ||
-    rawClassStr === asgGrade ||
-    rawClassStr === targetGrade ||
-    rawClassLower === `lớp ${asgGradeNum}` ||
-    rawClassLower === `khối ${asgGradeNum}`
-  ) {
-    // Nếu targetClassNames rỗng hoặc chứa tên khối/tất cả -> toàn bộ lớp trong khối đều nhận được
-    if (
-      targetNames.length === 0 ||
-      targetNames.some((t) => {
-        const tl = t.toLowerCase();
-        return (
-          tl.includes("tất cả") ||
-          tl.includes("cả khối") ||
-          tl.includes("toàn khối") ||
-          tl.includes("chung") ||
-          tl === asgGrade.toLowerCase() ||
-          tl === targetGrade.toLowerCase() ||
-          tl === `lớp ${asgGradeNum}` ||
-          tl === `khối ${asgGradeNum}`
-        );
-      })
-    ) {
-      return true;
-    }
+    rawClassLower.includes("toàn trường") ||
+    rawClassLower.includes("chung");
+
+  if (targetNames.length === 0 && isAllGradeTarget) {
+    return true;
   }
+
+  if (
+    targetNames.some((t) => {
+      const tl = t.toLowerCase();
+      return (
+        tl.includes("tất cả") ||
+        tl.includes("cả khối") ||
+        tl.includes("toàn khối") ||
+        tl.includes("toàn trường") ||
+        tl === asgGrade.toLowerCase() ||
+        tl === targetGrade.toLowerCase() ||
+        tl === `lớp ${asgGradeNum}` ||
+        tl === `khối ${asgGradeNum}`
+      );
+    })
+  ) {
+    return true;
+  }
+
+  // Helper so khớp chuẩn xác tên lớp (hỗ trợ "4/1" vs "Lớp 4/1", "4A" vs "Lớp 4A", "4/2"...)
+  const matchesClass = (candidateName: string): boolean => {
+    const cLower = String(candidateName || "").toLowerCase().trim();
+    if (!cLower) return false;
+    const cleanCand = cLower.replace(/^(lớp|khối)\s*/i, "").trim();
+    if (cLower === cNameLower) return true;
+    if (cleanCand && cleanStudentClass && cleanCand === cleanStudentClass) return true;
+    if (cLower === `lớp ${cleanStudentClass}` || `lớp ${cleanCand}` === cNameLower) return true;
+    return false;
+  };
 
   // 2. Nếu targetClassNames có danh sách lớp cụ thể
   if (targetNames.length > 0) {
-    if (
-      targetNames.some((t) => {
-        const tl = t.toLowerCase();
-        const cleanT = tl.replace(/^(lớp|khối)\s+/i, "").trim();
-        return (
-          tl === cNameLower ||
-          tl === `lớp ${cNameLower}` ||
-          cNameLower === `lớp ${tl}` ||
-          tl.includes(cNameLower) ||
-          cNameLower.includes(tl) ||
-          (cleanC && cleanT && (cleanC === cleanT || cleanC.includes(cleanT) || cleanT.includes(cleanC)))
-        );
-      })
-    ) {
-      return true;
-    }
+    return targetNames.some((t) => matchesClass(t));
   }
 
   // 3. Nếu targetClassNames rỗng nhưng className chuỗi có liệt kê lớp
+  // LƯU Ý QUAN TRỌNG: Chỉ phân tách bằng dấu phẩy (,) hoặc chấm phẩy (;), TUYỆT ĐỐI KHÔNG phân tách bằng gạch chéo (/) vì tên lớp ở Việt Nam là 4/1, 3/2!
   if (rawClassStr) {
     const classList = rawClassStr
-      .split(/[,;\/]+/)
+      .split(/[,;]+/)
       .map((s) => s.trim())
       .filter(Boolean);
 
-    if (
-      classList.some((c) => {
-        const cl = c.toLowerCase();
-        const cleanCl = cl.replace(/^(lớp|khối)\s+/i, "").trim();
-        return (
-          cl === cNameLower ||
-          cl === `lớp ${cNameLower}` ||
-          cNameLower === `lớp ${cl}` ||
-          cl.includes(cNameLower) ||
-          cNameLower.includes(cl) ||
-          (cleanC && cleanCl && (cleanC === cleanCl || cleanC.includes(cleanCl) || cleanCl.includes(cleanC))) ||
-          cl === `lớp ${asgGradeNum}` ||
-          cl === `khối ${asgGradeNum}` ||
-          cl.includes("cả khối") ||
-          cl.includes("tất cả")
-        );
-      })
-    ) {
+    if (classList.some((c) => matchesClass(c))) {
       return true;
     }
   }
 
-  // Mặc định: Nếu cùng khối và không có ràng buộc cụ thể thì cho phép học sinh nhận bài
+  // Mặc định: Nếu cùng khối và không có ràng buộc lớp cụ thể thì cho phép học sinh nhận bài
   return targetNames.length === 0;
 }
 

@@ -104,6 +104,12 @@ export function parseAssignmentRow(row: any): Assignment {
       title: row.title || row.payload.title,
       grade: row.grade || row.payload.grade,
       className: row.class_name || row.payload.className || "",
+      targetClassNames:
+        Array.isArray(row.target_class_names) && row.target_class_names.length > 0
+          ? row.target_class_names
+          : Array.isArray(row.payload.targetClassNames)
+          ? row.payload.targetClassNames
+          : [],
     };
   }
   return {
@@ -167,6 +173,10 @@ export function parseSubmissionRow(row: any): StudentSubmission {
       aiScore: typeof row.ai_score === "number" ? row.ai_score : row.payload.aiScore,
       approvalStatus: row.approval_status || row.payload.approvalStatus || "pending",
       submittedAt: row.submitted_at || row.payload.submittedAt || new Date().toISOString(),
+      practiceWorkImageDataUrl:
+        row.practice_work_image_data_url || row.payload.practiceWorkImageDataUrl || undefined,
+      grade: row.grade || row.payload.grade || "Lớp 4",
+      assignmentTitle: row.assignment_title || row.payload.assignmentTitle || "",
     };
   }
   return {
@@ -683,6 +693,20 @@ export function subscribeSupabaseSystemState(
 }
 
 /**
+ * Làm nhẹ payload bài nộp để phát qua WebSocket Supabase Realtime không bị quá giới hạn 256KB
+ */
+function sanitizeSubmissionForBroadcast(sub: StudentSubmission): StudentSubmission {
+  if (!sub) return sub;
+  const clone = { ...sub };
+  // Nếu practiceWorkImageDataUrl là chuỗi base64 dài thì bỏ trống trong gói broadcast
+  // vì ảnh gốc đã được lưu an toàn trong bảng 'submissions' trên PostgreSQL
+  if (clone.practiceWorkImageDataUrl && clone.practiceWorkImageDataUrl.length > 500) {
+    clone.practiceWorkImageDataUrl = "";
+  }
+  return clone;
+}
+
+/**
  * Lưu/Cập nhật một đề bài kiểm tra lên bảng 'assignments' và phát Realtime
  */
 export async function saveAssignmentToSupabase(assignment: Assignment): Promise<void> {
@@ -696,9 +720,9 @@ export async function saveAssignmentToSupabase(assignment: Assignment): Promise<
     : [assignment, ...currentSnap.assignments];
   updateStoredLocalSnapshot({ assignments: nextAsgs });
 
-  // 1. Lưu vào bảng 'assignments' trên Supabase nếu bảng đã tạo
+  // 1. Lưu trực tiếp vào bảng 'assignments' trên Supabase
   try {
-    await supabase.from("assignments").upsert({
+    const { error: asgErr } = await supabase.from("assignments").upsert({
       id: assignment.id,
       code: assignment.code || "",
       title: assignment.title,
@@ -715,9 +739,31 @@ export async function saveAssignmentToSupabase(assignment: Assignment): Promise<
       payload: assignment,
       updated_at: nowIso,
     });
+    if (asgErr) {
+      console.warn("Lỗi lưu bảng assignments:", asgErr.message || asgErr);
+    }
   } catch (err) {
     console.warn("Lỗi lưu bảng assignments:", err);
   }
+
+  // 1.2 Lưu dự phòng vào bảng tổng hợp eduai_system_state
+  try {
+    const st = await fetchInitialSupabaseState();
+    const currentAssignments = st?.assignments || [];
+    const asgExists = currentAssignments.some((a) => a.id === assignment.id);
+    const updatedAssignments = asgExists
+      ? currentAssignments.map((a) => (a.id === assignment.id ? assignment : a))
+      : [assignment, ...currentAssignments];
+    await supabase.from("eduai_system_state").upsert({
+      id: "primary",
+      payload: {
+        ...(st || {}),
+        assignments: updatedAssignments,
+        lastUpdatedAt: new Date().toLocaleString("vi-VN"),
+      },
+      updated_at: nowIso,
+    });
+  } catch {}
 
   // 2. Phát broadcast qua channel để học sinh và các trình duyệt khác nhận ngay tức thì
   await safeBroadcast("assignments_event", {
@@ -780,7 +826,7 @@ export async function saveSubmissionToSupabase(submission: StudentSubmission): P
 
   // 1. Lưu vào bảng 'submissions' trên Supabase nếu bảng đã tạo
   try {
-    await supabase.from("submissions").upsert({
+    const { error: subErr } = await supabase.from("submissions").upsert({
       id: submission.id,
       student_id: submission.studentId || "",
       student_name: submission.studentName,
@@ -812,22 +858,47 @@ export async function saveSubmissionToSupabase(submission: StudentSubmission): P
       payload: submission,
       updated_at: nowIso,
     });
+    if (subErr) {
+      console.warn("Lỗi lưu bảng submissions:", subErr.message || subErr);
+    }
   } catch (err) {
     console.warn("Lỗi lưu bảng submissions:", err);
   }
 
-  // 2. Phát broadcast qua channel để giáo viên trên máy khác và học sinh nhận ngay
+  // 1.2 Lưu dự phòng vào eduai_system_state
+  try {
+    const st = await fetchInitialSupabaseState();
+    const currentSubs = st?.submissions || [];
+    const subExists = currentSubs.some((s) => s.id === submission.id);
+    const updatedSubs = subExists
+      ? currentSubs.map((s) => (s.id === submission.id ? submission : s))
+      : [submission, ...currentSubs];
+    await supabase.from("eduai_system_state").upsert({
+      id: "primary",
+      payload: {
+        ...(st || {}),
+        submissions: updatedSubs,
+        lastUpdatedAt: new Date().toLocaleString("vi-VN"),
+      },
+      updated_at: nowIso,
+    });
+  } catch {}
+
+  // 2. Phát broadcast qua channel với payload nhẹ (đã sanitize ảnh lớn) để không vượt trần 256KB
+  const safeSub = sanitizeSubmissionForBroadcast(submission);
+  const safeSubsList = nextSubs.map(sanitizeSubmissionForBroadcast);
+
   await safeBroadcast("submissions_event", {
-    newSubmission: submission,
+    newSubmission: safeSub,
     timestamp: nowIso,
   });
 
   await safeBroadcast("submissions_event", {
-    submissions: nextSubs,
+    submissions: safeSubsList,
     timestamp: nowIso,
   });
 
-  sendSyncBroadcast("NEW_SUBMISSION", submission);
+  sendSyncBroadcast("NEW_SUBMISSION", safeSub);
 }
 
 /**

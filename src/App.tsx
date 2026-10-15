@@ -78,6 +78,10 @@ import {
   checkSupabaseHealth,
   SupabaseHealthStatus,
   requestPeerSync,
+  fetchInitialSupabaseAssignments,
+  fetchInitialSupabaseSubmissions,
+  fetchInitialSupabaseClasses,
+  fetchInitialSupabaseState,
 } from "./services/supabaseService";
 import { subscribeSyncBroadcast } from "./utils/broadcastSync";
 
@@ -367,6 +371,71 @@ export default function App() {
       unsubSubmissions();
       unsubSystemState();
       unsubBroadcast();
+    };
+  }, []);
+
+  const [isRefreshingCloud, setIsRefreshingCloud] = useState<boolean>(false);
+
+  /**
+   * Đồng bộ & Làm mới toàn bộ dữ liệu thời gian thực từ Supabase Cloud
+   * Đảm bảo mọi bài nộp của học sinh và đề thi giao từ máy khác lập tức xuất hiện
+   */
+  const handleRefreshSupabaseData = async (silentOrEvent?: boolean | React.MouseEvent | unknown) => {
+    const silent = typeof silentOrEvent === "boolean" ? silentOrEvent : false;
+    if (!silent) setIsRefreshingCloud(true);
+    try {
+      const [asgs, subs, cls, st] = await Promise.all([
+        fetchInitialSupabaseAssignments(),
+        fetchInitialSupabaseSubmissions(),
+        fetchInitialSupabaseClasses(),
+        fetchInitialSupabaseState(),
+      ]);
+
+      if (Array.isArray(asgs) && asgs.length > 0) {
+        setAssignments((prev) => mergeArrayById(asgs, prev, []));
+      } else if (st?.assignments && st.assignments.length > 0) {
+        setAssignments((prev) => mergeArrayById(st.assignments, prev, []));
+      }
+
+      if (Array.isArray(subs) && subs.length > 0) {
+        setSubmissions((prev) => mergeArrayById(subs, prev, []));
+      } else if (st?.submissions && st.submissions.length > 0) {
+        setSubmissions((prev) => mergeArrayById(st.submissions, prev, []));
+      }
+
+      if (Array.isArray(cls) && cls.length > 0) {
+        setClassesList((prev) => mergeArrayById(cls, prev, []));
+      } else if (st?.classes && st.classes.length > 0) {
+        setClassesList((prev) => mergeArrayById(st.classes, prev, []));
+      }
+
+      if (!silent) {
+        await requestPeerSync();
+      }
+    } catch (err) {
+      console.warn("Lỗi làm mới dữ liệu Supabase:", err);
+    } finally {
+      if (!silent) {
+        setTimeout(() => setIsRefreshingCloud(false), 800);
+      }
+    }
+  };
+
+  // Tự động kiểm tra & cập nhật dữ liệu từ Supabase định kỳ (mỗi 3.5 giây) & khi người dùng quay lại tab trình duyệt
+  useEffect(() => {
+    const handleFocus = () => {
+      handleRefreshSupabaseData(false);
+    };
+    window.addEventListener("focus", handleFocus);
+
+    // Polling định kỳ mỗi 3.5s để bảo đảm 100% đề thi mới giao & bài học sinh nộp lập tức xuất hiện giữa các trình duyệt khác nhau
+    const pollInterval = setInterval(() => {
+      handleRefreshSupabaseData(true);
+    }, 3500);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      clearInterval(pollInterval);
     };
   }, []);
 
@@ -1252,6 +1321,17 @@ export default function App() {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={handleRefreshSupabaseData}
+                  disabled={isRefreshingCloud}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer whitespace-nowrap shadow-xs"
+                  title="Tải lại ngay danh sách bài nộp và đề thi mới nhất từ Supabase Cloud"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCloud ? "animate-spin" : ""}`} />
+                  <span>{isRefreshingCloud ? "Đang đồng bộ..." : "Làm mới từ Cloud"}</span>
+                </button>
+
+                <button
+                  type="button"
                   disabled={selectedSubIds.length === 0}
                   onClick={handleBulkApproveSelected}
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
@@ -1792,6 +1872,7 @@ export default function App() {
             submissions={submissions}
             onNewSubmission={handleNewStudentSubmission}
             onInspectSubmissionReadOnly={(sub) => setInspectedSubmission(sub)}
+            onRefreshData={handleRefreshSupabaseData}
           />
         )}
       </main>
