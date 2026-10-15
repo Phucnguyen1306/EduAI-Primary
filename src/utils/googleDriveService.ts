@@ -114,7 +114,17 @@ export const googleSignIn = async (): Promise<{
           scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
           callback: async (tokenResponse: any) => {
             if (tokenResponse?.error) {
-              reject(new Error(tokenResponse.error_description || tokenResponse.error));
+              const errCode = tokenResponse.error;
+              const errDesc = tokenResponse.error_description || "";
+              if (errCode === "popup_closed_by_user") {
+                reject(new Error("Cửa sổ đăng nhập Google đã bị đóng trước khi hoàn tất."));
+                return;
+              }
+              if (errCode === "access_denied") {
+                reject(new Error("Bạn đã từ chối cấp quyền truy cập Google Drive. Vui lòng cho phép quyền để đồng bộ."));
+                return;
+              }
+              reject(new Error(`Google OAuth [${errCode}]: ${errDesc || "Lỗi xác thực tên miền hoặc quyền truy cập."}`));
               return;
             }
             if (tokenResponse?.access_token) {
@@ -159,22 +169,35 @@ export const googleSignIn = async (): Promise<{
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accessToken: cachedAccessToken }),
-    });
+    }).catch(() => {});
 
     notifyAuthListeners();
     return { user: res.user, accessToken: res.token };
   } catch (err: any) {
-    console.warn("GIS token fallback to Supabase OAuth:", err?.message || err);
-    // Phương thức 2: Supabase Google OAuth
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        scopes: "https://www.googleapis.com/auth/drive",
-        redirectTo: window.location.origin,
-      },
-    });
-    if (error) throw error;
-    return null;
+    console.warn("GIS token attempt note:", err?.message || err);
+    // Nếu là do người dùng chủ động đóng popup, không thử redirect fallback
+    if (err?.message?.includes("đã bị đóng")) {
+      throw err;
+    }
+
+    try {
+      // Phương thức 2: Supabase Google OAuth
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          scopes: "https://www.googleapis.com/auth/drive",
+          redirectTo: window.location.origin,
+        },
+      });
+      if (error) {
+        throw new Error(
+          `Không thể kết nối Google OAuth (${error.message}). Nếu bạn đang mở trên Vercel (${window.location.origin}), hãy thêm tên miền này vào 'Authorized JavaScript origins' trong Google Cloud Console của Client ID ${GOOGLE_CLIENT_ID}. Dữ liệu của bạn vẫn được lưu trữ và đồng bộ an toàn 100% trên Supabase Cloud.`
+        );
+      }
+      return null;
+    } catch (fallbackErr: any) {
+      throw new Error(fallbackErr?.message || err?.message || "Đăng nhập Google thất bại.");
+    }
   }
 };
 

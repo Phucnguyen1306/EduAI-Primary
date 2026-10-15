@@ -66,12 +66,12 @@ import {
   subscribeClasses,
   subscribeSubmissions,
   subscribeSystemState,
-  seedInitialFirestoreDataIfEmpty,
-  saveSubmissionToFirestore,
-  saveAssignmentToFirestore,
-  saveClassesToFirestore,
-  deleteSubmissionFromFirestore,
-  deleteAssignmentFromFirestore,
+  seedInitialSupabaseDataIfEmpty,
+  saveSubmissionToSupabase,
+  saveAssignmentToSupabase,
+  saveClassesToSupabase,
+  deleteSubmissionFromSupabase,
+  deleteAssignmentFromSupabase,
 } from "./services/supabaseService";
 import { subscribeSyncBroadcast } from "./utils/broadcastSync";
 
@@ -205,33 +205,75 @@ export default function App() {
     });
   }, [activeTab]);
 
-  // Lắng nghe cơ sở dữ liệu Firebase Firestore thời gian thực (Realtime Multi-Device Sync)
+  // Lắng nghe cơ sở dữ liệu Supabase Realtime & Database (Zero Quota Limit)
   useEffect(() => {
-    seedInitialFirestoreDataIfEmpty(INITIAL_CLASSES, INITIAL_ASSIGNMENTS, INITIAL_SUBMISSIONS).catch(() => {});
+    seedInitialSupabaseDataIfEmpty(INITIAL_CLASSES, INITIAL_ASSIGNMENTS, INITIAL_SUBMISSIONS).catch(() => {});
 
-    // Lắng nghe Đề thi thời gian thực
+    // Lắng nghe Đề thi thời gian thực từ Supabase Realtime
     const unsubAssignments = subscribeAssignments((remoteAssignments) => {
-      if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
+      if (typeof remoteAssignments === "function") {
         setAssignments(remoteAssignments);
+      } else if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
+        setAssignments((prev) => {
+          if (remoteAssignments.length === 1 && prev.length > 0) {
+            const incoming = remoteAssignments[0];
+            const exists = prev.some((a) => a.id === incoming.id);
+            return exists
+              ? prev.map((a) => (a.id === incoming.id ? incoming : a))
+              : [incoming, ...prev];
+          }
+          return remoteAssignments;
+        });
       }
     });
 
-    // Lắng nghe Lớp học & Học sinh thời gian thực
+    // Lắng nghe Lớp học & Học sinh thời gian thực từ Supabase Realtime
     const unsubClasses = subscribeClasses((remoteClasses) => {
-      if (Array.isArray(remoteClasses) && remoteClasses.length > 0) {
+      if (typeof remoteClasses === "function") {
         setClassesList(remoteClasses);
+      } else if (Array.isArray(remoteClasses) && remoteClasses.length > 0) {
+        setClassesList((prev) => {
+          if (remoteClasses.length === 1 && prev.length > 0) {
+            const incoming = remoteClasses[0];
+            const exists = prev.some((c) => c.id === incoming.id);
+            return exists
+              ? prev.map((c) => (c.id === incoming.id ? incoming : c))
+              : [incoming, ...prev];
+          }
+          return remoteClasses;
+        });
       }
     });
 
-    // Lắng nghe Bài nộp của học sinh thời gian thực
+    // Lắng nghe Bài nộp của học sinh thời gian thực từ Supabase Realtime
     const unsubSubmissions = subscribeSubmissions((remoteSubmissions) => {
-      if (Array.isArray(remoteSubmissions)) {
+      if (typeof remoteSubmissions === "function") {
         setSubmissions(remoteSubmissions);
+      } else if (Array.isArray(remoteSubmissions)) {
+        setSubmissions((prev) => {
+          if (remoteSubmissions.length === 1 && prev.length > 0) {
+            const incoming = remoteSubmissions[0];
+            const exists = prev.some((s) => s.id === incoming.id);
+            return exists
+              ? prev.map((s) => (s.id === incoming.id ? incoming : s))
+              : [incoming, ...prev];
+          }
+          return remoteSubmissions;
+        });
       }
     });
 
-    // Lắng nghe Trạng thái hệ thống thời gian thực
+    // Lắng nghe Trạng thái hệ thống thời gian thực toàn diện từ Supabase
     const unsubSystemState = subscribeSystemState((remoteState) => {
+      if (Array.isArray(remoteState?.assignments) && remoteState.assignments.length > 0) {
+        setAssignments(remoteState.assignments);
+      }
+      if (Array.isArray(remoteState?.classes) && remoteState.classes.length > 0) {
+        setClassesList(remoteState.classes);
+      }
+      if (Array.isArray(remoteState?.submissions)) {
+        setSubmissions(remoteState.submissions);
+      }
       if (remoteState?.operationHistory && Array.isArray(remoteState.operationHistory)) {
         setOperationHistory(remoteState.operationHistory);
       }
@@ -374,7 +416,7 @@ export default function App() {
   };
 
   const handleDeleteSingleSubmission = (id: string) => {
-    deleteSubmissionFromFirestore(id).catch(() => {});
+    deleteSubmissionFromSupabase(id).catch(() => {});
     setSubmissions((prev) => {
       const targetSub = prev.find((s) => s.id === id);
       const next = prev.filter((s) => s.id !== id);
@@ -445,8 +487,8 @@ export default function App() {
   };
 
   const handleAddAssignment = (newAsg: Assignment) => {
-    saveAssignmentToFirestore(newAsg).catch((err) => {
-      console.warn("Lưu đề thi lên Firestore:", err);
+    saveAssignmentToSupabase(newAsg).catch((err) => {
+      console.warn("Lưu đề thi lên Supabase:", err);
     });
     setAssignments((prev) => {
       const exists = prev.some((a) => a.id === newAsg.id);
@@ -465,7 +507,7 @@ export default function App() {
   };
 
   const handleDeleteAssignment = (assignmentId: string) => {
-    deleteAssignmentFromFirestore(assignmentId).catch(() => {});
+    deleteAssignmentFromSupabase(assignmentId).catch(() => {});
     setAssignments((prev) => {
       const targetAsg = prev.find((a) => a.id === assignmentId);
       const next = prev.filter((a) => a.id !== assignmentId);
@@ -480,8 +522,8 @@ export default function App() {
   };
 
   const handleNewStudentSubmission = (newSub: StudentSubmission) => {
-    saveSubmissionToFirestore(newSub).catch((err) => {
-      console.warn("Lưu bài nộp lên Firestore:", err);
+    saveSubmissionToSupabase(newSub).catch((err) => {
+      console.warn("Lưu bài nộp lên Supabase:", err);
     });
     setSubmissions((prev) => {
       const exists = prev.some((s) => s.id === newSub.id);
@@ -499,8 +541,8 @@ export default function App() {
 
   const handleUpdateClassesAndSync = (updatedClasses: ClassRoom[]) => {
     setClassesList(updatedClasses);
-    saveClassesToFirestore(updatedClasses).catch((err) => {
-      console.warn("Lưu danh sách lớp lên Firestore:", err);
+    saveClassesToSupabase(updatedClasses).catch((err) => {
+      console.warn("Lưu danh sách lớp lên Supabase:", err);
     });
     const totalStudents = updatedClasses.reduce(
       (sum, c) => sum + (c.students?.length || 0),
