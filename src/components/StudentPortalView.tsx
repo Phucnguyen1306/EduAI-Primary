@@ -29,7 +29,7 @@ import {
   ExtractedInspection,
   StudentSubmission,
 } from "../types/grading";
-import { saveSubmissionToFirestore } from "../services/firebaseService";
+import { saveSubmissionToSupabase } from "../services/supabaseService";
 import {
   analyzeSubmissionAndWriteTeacherFeedback,
   ensureTeacherPersonaThay,
@@ -745,9 +745,9 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       }
 
       try {
-        await saveSubmissionToFirestore(newSubmission);
+        await saveSubmissionToSupabase(newSubmission);
       } catch (fErr) {
-        console.warn("Đồng bộ bài nộp Firestore:", fErr);
+        console.warn("Đồng bộ bài nộp Supabase:", fErr);
       }
 
       onNewSubmission(newSubmission);

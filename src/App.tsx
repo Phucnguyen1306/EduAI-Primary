@@ -72,7 +72,7 @@ import {
   saveClassesToFirestore,
   deleteSubmissionFromFirestore,
   deleteAssignmentFromFirestore,
-} from "./services/firebaseService";
+} from "./services/supabaseService";
 import { subscribeSyncBroadcast } from "./utils/broadcastSync";
 
 type ActiveTab =
@@ -235,8 +235,8 @@ export default function App() {
       if (remoteState?.operationHistory && Array.isArray(remoteState.operationHistory)) {
         setOperationHistory(remoteState.operationHistory);
       }
-      if (remoteState?.lastUpdatedAt) {
-        setLastSyncTime(remoteState.lastUpdatedAt);
+      if ((remoteState as any)?.lastUpdatedAt) {
+        setLastSyncTime((remoteState as any).lastUpdatedAt);
       }
     });
 

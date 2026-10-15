@@ -15,7 +15,6 @@ import {
   LogOut,
   FolderOpen,
 } from "lucide-react";
-import { User } from "firebase/auth";
 import {
   TARGET_DRIVE_FOLDER_ID,
   TARGET_DRIVE_FOLDER_URL,
@@ -26,6 +25,7 @@ import {
   pullSystemDataFromGoogleDrive,
   fetchGoogleDriveStatus,
   GoogleDriveStatusInfo,
+  GoogleDriveUser,
 } from "../utils/googleDriveService";
 
 interface GoogleDriveSyncModalProps {
@@ -48,7 +48,7 @@ export function GoogleDriveSyncModal({
   onRestoreState,
   currentStateStats,
 }: GoogleDriveSyncModalProps) {
-  const [googleUser, setGoogleUser] = useState<User | null>(null);
+  const [googleUser, setGoogleUser] = useState<GoogleDriveUser | null>(null);
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [driveStatus, setDriveStatus] = useState<GoogleDriveStatusInfo | null>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);

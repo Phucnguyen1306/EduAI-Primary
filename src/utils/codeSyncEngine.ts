@@ -1,6 +1,6 @@
 import { Assignment, StudentSubmission } from "../types/grading";
 import type { ClassRoom } from "../components/ClassManagerView";
-import { syncEntireStateToFirestore } from "../services/firebaseService";
+import { syncEntireStateToSupabase } from "../services/supabaseService";
 import { syncSystemDataToGoogleDrive } from "./googleDriveService";
 
 export interface OperationLogEntry {
@@ -484,8 +484,8 @@ export async function syncStateToCodebase(
 
   const mergedLocal = saveCachedLocalState(payload, nowStr);
 
-  // Đồng bộ thời gian thực lên Firebase Firestore
-  syncEntireStateToFirestore({
+  // Đồng bộ thời gian thực lên Supabase Realtime (Không giới hạn lượt, miễn phí 100%)
+  syncEntireStateToSupabase({
     ...payload,
     classes: mergedLocal.classes,
     assignments: mergedLocal.assignments,
@@ -496,7 +496,7 @@ export async function syncStateToCodebase(
     examBuilderDraft: mergedLocal.examBuilderDraft,
     deletedIds: mergedLocal.deletedIds,
   }).catch((err) => {
-    console.warn("Lỗi đồng bộ Firebase:", err);
+    console.warn("Lỗi đồng bộ Supabase:", err);
   });
 
   // Tự động sao lưu và đồng bộ toàn bộ dữ liệu thao tác của Giáo viên & Học sinh lên Google Drive chia sẻ (0đ phí)

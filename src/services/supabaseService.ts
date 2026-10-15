@@ -47,6 +47,26 @@ function getOrCreateLiveChannel() {
 }
 
 /**
+ * Tải trạng thái ban đầu từ bảng Supabase nếu có
+ */
+export async function fetchInitialSupabaseState(): Promise<SystemCodeStatePayload | null> {
+  try {
+    const { data, error } = await supabase
+      .from("eduai_system_state")
+      .select("payload")
+      .eq("id", "primary")
+      .single();
+
+    if (!error && data?.payload) {
+      return data.payload as SystemCodeStatePayload;
+    }
+  } catch {
+    // Ignore if table does not exist
+  }
+  return null;
+}
+
+/**
  * Đăng ký lắng nghe Đề bài & Bài tập thời gian thực từ Supabase Realtime
  * Giúp học sinh nhận bài ngay lập tức mà không bao giờ bị giới hạn số lượt như Firebase!
  */
@@ -68,7 +88,7 @@ export function subscribeSupabaseAssignments(
   });
 
   // Tải trạng thái ban đầu từ Supabase Storage / Database nếu có
-  fetchInitialSupabaseState().then((state) => {
+  fetchInitialSupabaseState().then((state: SystemCodeStatePayload | null) => {
     if (state?.assignments && state.assignments.length > 0) {
       onUpdate(state.assignments);
     }
@@ -93,7 +113,7 @@ export function subscribeSupabaseClasses(
     }
   });
 
-  fetchInitialSupabaseState().then((state) => {
+  fetchInitialSupabaseState().then((state: SystemCodeStatePayload | null) => {
     if (state?.classes && state.classes.length > 0) {
       onUpdate(state.classes);
     }
@@ -118,7 +138,7 @@ export function subscribeSupabaseSubmissions(
     }
   });
 
-  fetchInitialSupabaseState().then((state) => {
+  fetchInitialSupabaseState().then((state: SystemCodeStatePayload | null) => {
     if (state?.submissions && state.submissions.length > 0) {
       onUpdate(state.submissions);
     }
@@ -161,7 +181,7 @@ export async function broadcastAssignmentToSupabase(assignment: Assignment): Pro
     });
 
     // Thông báo thêm qua kênh cục bộ
-    sendSyncBroadcast({ type: "ADD_ASSIGNMENT", payload: assignment });
+    sendSyncBroadcast("ADD_ASSIGNMENT", assignment);
   } catch (err) {
     console.warn("Supabase broadcast assignment warning:", err);
   }
@@ -184,7 +204,7 @@ export async function broadcastSubmissionToSupabase(
       },
     });
 
-    sendSyncBroadcast({ type: "NEW_SUBMISSION", payload: submission });
+    sendSyncBroadcast("NEW_SUBMISSION", submission);
   } catch (err) {
     console.warn("Supabase broadcast submission warning:", err);
   }
@@ -229,21 +249,71 @@ export async function syncEntireStateToSupabase(
 }
 
 /**
- * Tải trạng thái ban đầu từ bảng Supabase nếu có
+ * Lưu danh sách lớp học lên Supabase
  */
-export async function fetchInitialSupabaseState(): Promise<SystemCodeStatePayload | null> {
-  try {
-    const { data, error } = await supabase
-      .from("eduai_system_state")
-      .select("payload")
-      .eq("id", "primary")
-      .single();
-
-    if (!error && data?.payload) {
-      return data.payload as SystemCodeStatePayload;
-    }
-  } catch {
-    // Ignore if table does not exist
-  }
-  return null;
+export async function saveClassesToSupabase(classes: ClassRoom[]): Promise<void> {
+  await syncEntireStateToSupabase({ classes });
 }
+
+/**
+ * Lưu một bài tập / đề kiểm tra lên Supabase
+ */
+export async function saveAssignmentToSupabase(assignment: Assignment): Promise<void> {
+  await broadcastAssignmentToSupabase(assignment);
+}
+
+/**
+ * Lưu một bài nộp học sinh lên Supabase
+ */
+export async function saveSubmissionToSupabase(submission: StudentSubmission): Promise<void> {
+  await broadcastSubmissionToSupabase(submission);
+}
+
+/**
+ * Xóa một bài nộp khỏi Supabase
+ */
+export async function deleteSubmissionFromSupabase(id: string): Promise<void> {
+  await syncEntireStateToSupabase({
+    deletedIds: { submissions: [id] },
+  });
+}
+
+/**
+ * Xóa một đề bài khỏi Supabase
+ */
+export async function deleteAssignmentFromSupabase(id: string): Promise<void> {
+  await syncEntireStateToSupabase({
+    deletedIds: { assignments: [id] },
+  });
+}
+
+/**
+ * Khởi tạo dữ liệu ban đầu lên Supabase nếu chưa có
+ */
+export async function seedInitialSupabaseDataIfEmpty(
+  classes: ClassRoom[],
+  assignments: Assignment[],
+  submissions: StudentSubmission[]
+): Promise<void> {
+  const existing = await fetchInitialSupabaseState();
+  if (!existing || (!existing.classes && !existing.assignments)) {
+    await syncEntireStateToSupabase({
+      classes,
+      assignments,
+      submissions,
+    });
+  }
+}
+
+// Aliases cho việc tương thích ngược và chuyển đổi hoàn toàn từ Firebase sang Supabase
+export const subscribeAssignments = subscribeSupabaseAssignments;
+export const subscribeClasses = subscribeSupabaseClasses;
+export const subscribeSubmissions = subscribeSupabaseSubmissions;
+export const subscribeSystemState = subscribeSupabaseSystemState;
+export const saveSubmissionToFirestore = saveSubmissionToSupabase;
+export const saveAssignmentToFirestore = saveAssignmentToSupabase;
+export const saveClassesToFirestore = saveClassesToSupabase;
+export const deleteSubmissionFromFirestore = deleteSubmissionFromSupabase;
+export const deleteAssignmentFromFirestore = deleteAssignmentFromSupabase;
+export const syncEntireStateToFirestore = syncEntireStateToSupabase;
+export const seedInitialFirestoreDataIfEmpty = seedInitialSupabaseDataIfEmpty;

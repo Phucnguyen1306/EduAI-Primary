@@ -1,74 +1,180 @@
-import { initializeApp, getApps, getApp } from "firebase/app";
-import {
-  getAuth,
-  signInWithPopup,
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  User,
-} from "firebase/auth";
-import firebaseConfig from "../../firebase-applet-config.json";
 import { Assignment } from "../types/grading";
+import { supabase } from "../services/supabaseService";
 
 export const TARGET_DRIVE_FOLDER_ID = "15Kvyh1bnEtp2iJ7IPac7GYBV4_M-kN14";
 export const TARGET_DRIVE_FOLDER_URL =
   "https://drive.google.com/drive/folders/15Kvyh1bnEtp2iJ7IPac7GYBV4_M-kN14?usp=sharing";
 
 export const SCOPES = ["https://www.googleapis.com/auth/drive"];
+export const GOOGLE_CLIENT_ID = "859573140406-l1r3o91qnseu4hobfc2ep7u5om9g176d.apps.googleusercontent.com";
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
+export interface GoogleDriveUser {
+  email?: string;
+  displayName?: string;
+  photoURL?: string;
+}
 
-const provider = new GoogleAuthProvider();
-SCOPES.forEach((scope) => provider.addScope(scope));
-
-let isSigningIn = false;
 let cachedAccessToken: string | null = null;
+let currentGoogleUser: GoogleDriveUser | null = null;
+const authListeners: Array<(user: GoogleDriveUser | null, token: string | null) => void> = [];
 
+function notifyAuthListeners() {
+  authListeners.forEach((listener) => {
+    try {
+      listener(currentGoogleUser, cachedAccessToken);
+    } catch {}
+  });
+}
+
+/**
+ * Khởi tạo trạng thái xác thực từ Supabase session hoặc bộ nhớ
+ */
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthSuccess?: (user: GoogleDriveUser, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
-        if (onAuthFailure) onAuthFailure();
-      }
+  const listener = (user: GoogleDriveUser | null, token: string | null) => {
+    if (user && token) {
+      if (onAuthSuccess) onAuthSuccess(user, token);
     } else {
-      cachedAccessToken = null;
       if (onAuthFailure) onAuthFailure();
     }
+  };
+
+  authListeners.push(listener);
+
+  // Kiểm tra Supabase Auth session
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session?.provider_token) {
+      cachedAccessToken = session.provider_token;
+      currentGoogleUser = {
+        email: session.user?.email,
+        displayName: session.user?.user_metadata?.full_name || session.user?.email,
+        photoURL: session.user?.user_metadata?.avatar_url,
+      };
+      // Đồng bộ token lên server
+      fetch("/api/drive/teacher-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken: cachedAccessToken }),
+      }).catch(() => {});
+      notifyAuthListeners();
+    } else if (cachedAccessToken && currentGoogleUser) {
+      listener(currentGoogleUser, cachedAccessToken);
+    } else {
+      listener(null, null);
+    }
   });
+
+  return () => {
+    const idx = authListeners.indexOf(listener);
+    if (idx !== -1) authListeners.splice(idx, 1);
+  };
 };
 
+/**
+ * Đăng nhập Google để lấy quyền truy cập Google Drive:
+ * 1. Sử dụng Google Identity Services (GIS token client) không bị lỗi auth/unauthorized-domain của Firebase!
+ * 2. Fallback qua Supabase OAuth
+ */
 export const googleSignIn = async (): Promise<{
-  user: User;
+  user: GoogleDriveUser;
   accessToken: string;
 } | null> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error("Không lấy được mã truy cập Google Drive từ phiên đăng nhập.");
-    }
+  // Phương thức 1: Google Identity Services Token Client trực tiếp (hoạt động trên mọi domain, không bị Firebase chặn)
+  const tokenPromise = new Promise<{ token: string; user: GoogleDriveUser }>((resolve, reject) => {
+    const loadGsiScript = () => {
+      if (typeof window === "undefined") return reject(new Error("Môi trường không hỗ trợ."));
 
-    cachedAccessToken = credential.accessToken;
-    // Đồng bộ token lên server để học sinh nộp bài không cần đăng nhập Google
-    fetch("/api/drive/teacher-token", {
+      if ((window as any).google?.accounts?.oauth2) {
+        requestToken();
+        return;
+      }
+
+      const existingScript = document.getElementById("google-gsi-client");
+      if (existingScript) {
+        existingScript.addEventListener("load", requestToken);
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.id = "google-gsi-client";
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = requestToken;
+      script.onerror = () => reject(new Error("Không thể tải Google Identity Services SDK."));
+      document.head.appendChild(script);
+    };
+
+    const requestToken = () => {
+      try {
+        const client = (window as any).google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+          callback: async (tokenResponse: any) => {
+            if (tokenResponse?.error) {
+              reject(new Error(tokenResponse.error_description || tokenResponse.error));
+              return;
+            }
+            if (tokenResponse?.access_token) {
+              const token = tokenResponse.access_token;
+              // Lấy thông tin user profile từ Google
+              let profile: GoogleDriveUser = { email: "giaovien@gmail.com", displayName: "Giáo viên Tin học" };
+              try {
+                const userRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                if (userRes.ok) {
+                  const data = await userRes.json();
+                  profile = {
+                    email: data.email,
+                    displayName: data.name,
+                    photoURL: data.picture,
+                  };
+                }
+              } catch {}
+              resolve({ token, user: profile });
+            } else {
+              reject(new Error("Không nhận được token truy cập từ Google."));
+            }
+          },
+        });
+        client.requestAccessToken({ prompt: "consent" });
+      } catch (err: any) {
+        reject(err);
+      }
+    };
+
+    loadGsiScript();
+  });
+
+  try {
+    const res = await tokenPromise;
+    cachedAccessToken = res.token;
+    currentGoogleUser = res.user;
+
+    // Gửi token lên server để lưu vào mirror và đồng bộ tự động cho bài nộp học sinh
+    await fetch("/api/drive/teacher-token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ accessToken: cachedAccessToken }),
-    }).catch(() => {});
+    });
 
-    return { user: result.user, accessToken: cachedAccessToken };
-  } catch (error: any) {
-    console.error("Sign in error:", error);
-    throw error;
-  } finally {
-    isSigningIn = false;
+    notifyAuthListeners();
+    return { user: res.user, accessToken: res.token };
+  } catch (err: any) {
+    console.warn("GIS token fallback to Supabase OAuth:", err?.message || err);
+    // Phương thức 2: Supabase Google OAuth
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        scopes: "https://www.googleapis.com/auth/drive",
+        redirectTo: window.location.origin,
+      },
+    });
+    if (error) throw error;
+    return null;
   }
 };
 
@@ -76,13 +182,15 @@ export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
 };
 
-export const getCurrentGoogleUser = (): User | null => {
-  return auth.currentUser;
+export const getCurrentGoogleUser = (): GoogleDriveUser | null => {
+  return currentGoogleUser;
 };
 
 export const logoutGoogleDrive = async () => {
-  await auth.signOut();
+  await supabase.auth.signOut();
   cachedAccessToken = null;
+  currentGoogleUser = null;
+  notifyAuthListeners();
 };
 
 /**
@@ -272,4 +380,3 @@ export async function pullSystemDataFromGoogleDrive(): Promise<{
     return { ok: false, error: err?.message || "Lỗi kết nối khi đọc dữ liệu từ Google Drive." };
   }
 }
-
