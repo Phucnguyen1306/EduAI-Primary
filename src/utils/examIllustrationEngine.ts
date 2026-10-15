@@ -715,6 +715,8 @@ export function isAssignmentAssignedToClass(
     ? assignment.targetClassNames.map((s) => String(s || "").trim())
     : [];
 
+  const cleanC = cNameLower.replace(/^(lớp|khối)\s+/i, "").trim();
+
   // 1. Nếu đề bài giao cho toàn khối, tất cả lớp hoặc không chỉ định lớp riêng
   if (
     !rawClassStr ||
@@ -753,11 +755,14 @@ export function isAssignmentAssignedToClass(
     if (
       targetNames.some((t) => {
         const tl = t.toLowerCase();
+        const cleanT = tl.replace(/^(lớp|khối)\s+/i, "").trim();
         return (
           tl === cNameLower ||
           tl === `lớp ${cNameLower}` ||
           cNameLower === `lớp ${tl}` ||
-          tl.includes(cNameLower)
+          tl.includes(cNameLower) ||
+          cNameLower.includes(tl) ||
+          (cleanC && cleanT && (cleanC === cleanT || cleanC.includes(cleanT) || cleanT.includes(cleanC)))
         );
       })
     ) {
@@ -775,11 +780,14 @@ export function isAssignmentAssignedToClass(
     if (
       classList.some((c) => {
         const cl = c.toLowerCase();
+        const cleanCl = cl.replace(/^(lớp|khối)\s+/i, "").trim();
         return (
           cl === cNameLower ||
           cl === `lớp ${cNameLower}` ||
           cNameLower === `lớp ${cl}` ||
           cl.includes(cNameLower) ||
+          cNameLower.includes(cl) ||
+          (cleanC && cleanCl && (cleanC === cleanCl || cleanC.includes(cleanCl) || cleanCl.includes(cleanC))) ||
           cl === `lớp ${asgGradeNum}` ||
           cl === `khối ${asgGradeNum}` ||
           cl.includes("cả khối") ||

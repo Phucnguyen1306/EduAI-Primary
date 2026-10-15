@@ -25,6 +25,7 @@ import {
   X,
   Clock,
   FolderSync,
+  Database,
 } from "lucide-react";
 import {
   INITIAL_ASSIGNMENTS,
@@ -35,6 +36,7 @@ import {
 import {
   fetchSystemStateFromCode,
   loadCachedLocalState,
+  saveCachedLocalState,
   mergeArrayById,
   OperationLogEntry,
   syncStateToCodebase,
@@ -60,6 +62,7 @@ import { ClassAnalyticsView } from "./components/ClassAnalyticsView";
 import { ClassManagerView, INITIAL_CLASSES, ClassRoom } from "./components/ClassManagerView";
 import { Circular27AssessmentView } from "./components/Circular27AssessmentView";
 import { GoogleDriveSyncModal } from "./components/GoogleDriveSyncModal";
+import { SupabaseSyncModal } from "./components/SupabaseSyncModal";
 import { initAuth } from "./utils/googleDriveService";
 import {
   subscribeAssignments,
@@ -72,6 +75,9 @@ import {
   saveClassesToSupabase,
   deleteSubmissionFromSupabase,
   deleteAssignmentFromSupabase,
+  checkSupabaseHealth,
+  SupabaseHealthStatus,
+  requestPeerSync,
 } from "./services/supabaseService";
 import { subscribeSyncBroadcast } from "./utils/broadcastSync";
 
@@ -128,6 +134,18 @@ export default function App() {
   const [showGoogleDriveModal, setShowGoogleDriveModal] = useState<boolean>(false);
   const [googleDriveConnected, setGoogleDriveConnected] = useState<boolean>(false);
 
+  // Quản lý Trạng thái & Hộp thoại Supabase Realtime & Cloud Database
+  const [showSupabaseModal, setShowSupabaseModal] = useState<boolean>(false);
+  const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthStatus | null>(null);
+
+  useEffect(() => {
+    checkSupabaseHealth().then(setSupabaseHealth).catch(() => {});
+    const interval = setInterval(() => {
+      checkSupabaseHealth().then(setSupabaseHealth).catch(() => {});
+    }, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const unsubDrive = initAuth(
       () => setGoogleDriveConnected(true),
@@ -183,27 +201,27 @@ export default function App() {
     if (res.operationHistory) setOperationHistory(res.operationHistory);
   };
 
-  // Tự động hợp nhất 2 chiều trạng thái mới nhất từ Server & trình duyệt khi khởi động hoặc chuyển tab
+  // Tự động hợp nhất 2 chiều trạng thái mới nhất từ Server & trình duyệt khi khởi động (chỉ chạy 1 lần khi mở trang)
   useEffect(() => {
     fetchSystemStateFromCode().then((remote) => {
       if (!remote) return;
       if (Array.isArray(remote.classes) && remote.classes.length > 0) {
-        setClassesList(remote.classes);
+        setClassesList((prev) => mergeArrayById(remote.classes, prev, []));
       }
-      if (Array.isArray(remote.assignments)) {
-        setAssignments(remote.assignments);
+      if (Array.isArray(remote.assignments) && remote.assignments.length > 0) {
+        setAssignments((prev) => mergeArrayById(remote.assignments, prev, []));
       }
-      if (Array.isArray(remote.submissions)) {
-        setSubmissions(remote.submissions);
+      if (Array.isArray(remote.submissions) && remote.submissions.length > 0) {
+        setSubmissions((prev) => mergeArrayById(remote.submissions, prev, []));
       }
-      if (Array.isArray(remote.operationHistory)) {
-        setOperationHistory(remote.operationHistory);
+      if (Array.isArray(remote.operationHistory) && remote.operationHistory.length > 0) {
+        setOperationHistory((prev) => mergeArrayById(remote.operationHistory, prev, []));
       }
       if (remote.lastUpdatedAt) {
         setLastSyncTime(remote.lastUpdatedAt);
       }
     });
-  }, [activeTab]);
+  }, []); // Chạy 1 lần duy nhất khi khởi động, KHÔNG chạy lại theo [activeTab] để không ghi đè dữ liệu Realtime
 
   // Lắng nghe cơ sở dữ liệu Supabase Realtime & Database (Zero Quota Limit)
   useEffect(() => {
@@ -212,17 +230,25 @@ export default function App() {
     // Lắng nghe Đề thi thời gian thực từ Supabase Realtime
     const unsubAssignments = subscribeAssignments((remoteAssignments) => {
       if (typeof remoteAssignments === "function") {
-        setAssignments(remoteAssignments);
+        setAssignments((prev) => {
+          const next = (remoteAssignments as any)(prev);
+          saveCachedLocalState({ assignments: next });
+          return next;
+        });
       } else if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
         setAssignments((prev) => {
+          let next: Assignment[];
           if (remoteAssignments.length === 1 && prev.length > 0) {
             const incoming = remoteAssignments[0];
             const exists = prev.some((a) => a.id === incoming.id);
-            return exists
+            next = exists
               ? prev.map((a) => (a.id === incoming.id ? incoming : a))
               : [incoming, ...prev];
+          } else {
+            next = mergeArrayById(remoteAssignments, prev, []);
           }
-          return remoteAssignments;
+          saveCachedLocalState({ assignments: next });
+          return next;
         });
       }
     });
@@ -230,17 +256,25 @@ export default function App() {
     // Lắng nghe Lớp học & Học sinh thời gian thực từ Supabase Realtime
     const unsubClasses = subscribeClasses((remoteClasses) => {
       if (typeof remoteClasses === "function") {
-        setClassesList(remoteClasses);
+        setClassesList((prev) => {
+          const next = (remoteClasses as any)(prev);
+          saveCachedLocalState({ classes: next });
+          return next;
+        });
       } else if (Array.isArray(remoteClasses) && remoteClasses.length > 0) {
         setClassesList((prev) => {
+          let next: ClassRoom[];
           if (remoteClasses.length === 1 && prev.length > 0) {
             const incoming = remoteClasses[0];
             const exists = prev.some((c) => c.id === incoming.id);
-            return exists
+            next = exists
               ? prev.map((c) => (c.id === incoming.id ? incoming : c))
               : [incoming, ...prev];
+          } else {
+            next = mergeArrayById(remoteClasses, prev, []);
           }
-          return remoteClasses;
+          saveCachedLocalState({ classes: next });
+          return next;
         });
       }
     });
@@ -248,17 +282,25 @@ export default function App() {
     // Lắng nghe Bài nộp của học sinh thời gian thực từ Supabase Realtime
     const unsubSubmissions = subscribeSubmissions((remoteSubmissions) => {
       if (typeof remoteSubmissions === "function") {
-        setSubmissions(remoteSubmissions);
+        setSubmissions((prev) => {
+          const next = (remoteSubmissions as any)(prev);
+          saveCachedLocalState({ submissions: next });
+          return next;
+        });
       } else if (Array.isArray(remoteSubmissions)) {
         setSubmissions((prev) => {
+          let next: StudentSubmission[];
           if (remoteSubmissions.length === 1 && prev.length > 0) {
             const incoming = remoteSubmissions[0];
             const exists = prev.some((s) => s.id === incoming.id);
-            return exists
+            next = exists
               ? prev.map((s) => (s.id === incoming.id ? incoming : s))
               : [incoming, ...prev];
+          } else {
+            next = mergeArrayById(remoteSubmissions, prev, []);
           }
-          return remoteSubmissions;
+          saveCachedLocalState({ submissions: next });
+          return next;
         });
       }
     });
@@ -266,16 +308,28 @@ export default function App() {
     // Lắng nghe Trạng thái hệ thống thời gian thực toàn diện từ Supabase
     const unsubSystemState = subscribeSystemState((remoteState) => {
       if (Array.isArray(remoteState?.assignments) && remoteState.assignments.length > 0) {
-        setAssignments(remoteState.assignments);
+        setAssignments((prev) => {
+          const next = mergeArrayById(remoteState.assignments!, prev, []);
+          saveCachedLocalState({ assignments: next });
+          return next;
+        });
       }
       if (Array.isArray(remoteState?.classes) && remoteState.classes.length > 0) {
-        setClassesList(remoteState.classes);
+        setClassesList((prev) => {
+          const next = mergeArrayById(remoteState.classes!, prev, []);
+          saveCachedLocalState({ classes: next });
+          return next;
+        });
       }
       if (Array.isArray(remoteState?.submissions)) {
-        setSubmissions(remoteState.submissions);
+        setSubmissions((prev) => {
+          const next = mergeArrayById(remoteState.submissions!, prev, []);
+          saveCachedLocalState({ submissions: next });
+          return next;
+        });
       }
       if (remoteState?.operationHistory && Array.isArray(remoteState.operationHistory)) {
-        setOperationHistory(remoteState.operationHistory);
+        setOperationHistory((prev) => mergeArrayById(remoteState.operationHistory!, prev, []));
       }
       if ((remoteState as any)?.lastUpdatedAt) {
         setLastSyncTime((remoteState as any).lastUpdatedAt);
@@ -831,6 +885,26 @@ export default function App() {
         <div className="flex items-center gap-2.5 shrink-0 relative">
           {activeTab !== "student_portal" ? (
             <>
+              <button
+                type="button"
+                onClick={() => setShowSupabaseModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-xs"
+                title="Trạng thái kết nối Supabase Realtime & Cơ sở dữ liệu đám mây đa thiết bị"
+              >
+                <Database className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Supabase Cloud</span>
+                {supabaseHealth?.tablesReady ? (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Đã kết nối
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-amber-900 bg-amber-100 px-1.5 py-0.2 rounded font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                    Realtime 0ms
+                  </span>
+                )}
+              </button>
               <button
                 type="button"
                 onClick={() => setShowGoogleDriveModal(true)}
@@ -2010,6 +2084,12 @@ export default function App() {
           regularRecordsCount: Object.keys(initialCached?.tt27RegularRecords || {}).length,
           periodicRecordsCount: Object.keys(initialCached?.tt27PeriodicRecords || {}).length,
         }}
+      />
+
+      {/* Modal Trạng thái Supabase Realtime & Cloud Database */}
+      <SupabaseSyncModal
+        isOpen={showSupabaseModal}
+        onClose={() => setShowSupabaseModal(false)}
       />
 
       {/* System Footer */}

@@ -31,8 +31,14 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 
 const LIVE_CHANNEL_NAME = "eduai_primary_realtime_sync";
 
+// Định danh ngẫu nhiên của phiên làm việc trình duyệt này (Client ID)
+export const CLIENT_ID =
+  "client_" + Math.random().toString(36).substring(2, 9) + "_" + Date.now();
+
 // Kênh Realtime siêu tốc chia sẻ giữa Giáo viên và toàn bộ Học sinh
 let liveChannel: ReturnType<typeof supabase.channel> | null = null;
+let isChannelSubscribed = false;
+const pendingBroadcastQueue: Array<{ event: string; payload: any }> = [];
 
 // Callbacks lắng nghe
 type AssignmentUpdateCallback = (assignments: Assignment[] | ((prev: Assignment[]) => Assignment[])) => void;
@@ -43,6 +49,48 @@ const assignmentSubscribers = new Set<AssignmentUpdateCallback>();
 const classSubscribers = new Set<ClassUpdateCallback>();
 const submissionSubscribers = new Set<SubmissionUpdateCallback>();
 const systemStateSubscribers = new Set<(state: Partial<SystemCodeStatePayload>) => void>();
+
+// Quản lý Local Snapshot an toàn để sao lưu ngay lập tức
+function getStoredLocalSnapshot(): {
+  assignments: Assignment[];
+  submissions: StudentSubmission[];
+  classes: ClassRoom[];
+} {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return { assignments: [], submissions: [], classes: [] };
+    }
+    const raw = window.localStorage.getItem("eduai_primary_live_code_state_v2");
+    if (!raw) return { assignments: [], submissions: [], classes: [] };
+    const parsed = JSON.parse(raw);
+    return {
+      assignments: Array.isArray(parsed.assignments) ? parsed.assignments : [],
+      submissions: Array.isArray(parsed.submissions) ? parsed.submissions : [],
+      classes: Array.isArray(parsed.classes) ? parsed.classes : [],
+    };
+  } catch {
+    return { assignments: [], submissions: [], classes: [] };
+  }
+}
+
+function updateStoredLocalSnapshot(partial: {
+  assignments?: Assignment[];
+  submissions?: StudentSubmission[];
+  classes?: ClassRoom[];
+}) {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return;
+    const raw = window.localStorage.getItem("eduai_primary_live_code_state_v2");
+    const current = raw ? JSON.parse(raw) : {};
+    const next = {
+      ...current,
+      ...partial,
+      lastUpdatedAt: new Date().toLocaleString("vi-VN"),
+      lastUpdatedEpoch: Date.now(),
+    };
+    window.localStorage.setItem("eduai_primary_live_code_state_v2", JSON.stringify(next));
+  } catch {}
+}
 
 /**
  * Chuyển đổi dòng từ bảng 'assignments' thành Assignment object chuẩn
@@ -156,9 +204,34 @@ export function parseSubmissionRow(row: any): StudentSubmission {
 }
 
 /**
- * Khởi tạo kênh Realtime với cả Postgres Table Changes và Broadcast
+ * Phát broadcast an toàn có chờ kết nối WebSocket sẵn sàng
  */
-function getOrCreateLiveChannel() {
+export async function safeBroadcast(event: string, payload: any): Promise<boolean> {
+  const channel = getOrCreateLiveChannel();
+
+  if (!isChannelSubscribed) {
+    pendingBroadcastQueue.push({ event, payload });
+    // Nếu quá 30 phần tử thì giữ lại 30 phần tử mới nhất
+    if (pendingBroadcastQueue.length > 30) pendingBroadcastQueue.shift();
+  }
+
+  try {
+    const res = await channel.send({
+      type: "broadcast",
+      event,
+      payload,
+    });
+    return res === "ok";
+  } catch (err) {
+    console.warn(`[Supabase Broadcast] Lỗi gửi event ${event}:`, err);
+    return false;
+  }
+}
+
+/**
+ * Khởi tạo kênh Realtime với cả Postgres Table Changes, Broadcast và Peer-to-Peer State Handshake
+ */
+export function getOrCreateLiveChannel() {
   if (!liveChannel) {
     liveChannel = supabase.channel(LIVE_CHANNEL_NAME);
 
@@ -251,6 +324,7 @@ function getOrCreateLiveChannel() {
       const payload = event?.payload;
       if (payload?.type === "ASSIGNMENTS_UPDATED" && Array.isArray(payload.data)) {
         assignmentSubscribers.forEach((cb) => cb(payload.data));
+        updateStoredLocalSnapshot({ assignments: payload.data });
       } else if (payload?.type === "ADD_ASSIGNMENT" && payload.assignment) {
         assignmentSubscribers.forEach((cb) => cb([payload.assignment]));
       } else if (payload?.type === "DELETE_ASSIGNMENT" && payload.assignmentId) {
@@ -264,6 +338,7 @@ function getOrCreateLiveChannel() {
       const classes = event?.payload?.classes;
       if (Array.isArray(classes)) {
         classSubscribers.forEach((cb) => cb(classes));
+        updateStoredLocalSnapshot({ classes });
       }
     });
 
@@ -271,6 +346,7 @@ function getOrCreateLiveChannel() {
       const payload = event?.payload;
       if (Array.isArray(payload?.submissions)) {
         submissionSubscribers.forEach((cb) => cb(payload.submissions));
+        updateStoredLocalSnapshot({ submissions: payload.submissions });
       } else if (payload?.newSubmission) {
         submissionSubscribers.forEach((cb) => cb([payload.newSubmission]));
       } else if (payload?.deletedSubmissionId) {
@@ -287,13 +363,146 @@ function getOrCreateLiveChannel() {
       }
     });
 
+    // 6. Cơ chế bắt tay đồng bộ trạng thái ngang hàng (Peer-to-Peer State Handshake)
+    // Khi một máy mới (học sinh hoặc giáo viên) mở trang, gửi yêu cầu xin đề thi & bài nộp mới nhất
+    liveChannel.on("broadcast", { event: "peer_sync_request" }, (event) => {
+      const requesterId = event?.payload?.requesterId;
+      if (requesterId && requesterId !== CLIENT_ID) {
+        // Ta là một thiết bị đang mở, gửi ngay snapshot dữ liệu hiện tại về cho máy vừa mở
+        const snapshot = getStoredLocalSnapshot();
+        if (snapshot.assignments.length > 0 || snapshot.submissions.length > 0) {
+          liveChannel?.send({
+            type: "broadcast",
+            event: "peer_sync_response",
+            payload: {
+              targetId: requesterId,
+              responderId: CLIENT_ID,
+              assignments: snapshot.assignments,
+              submissions: snapshot.submissions,
+              classes: snapshot.classes,
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+      }
+    });
+
+    liveChannel.on("broadcast", { event: "peer_sync_response" }, (event) => {
+      const payload = event?.payload;
+      if (payload && (payload.targetId === CLIENT_ID || !payload.targetId)) {
+        if (Array.isArray(payload.assignments) && payload.assignments.length > 0) {
+          assignmentSubscribers.forEach((cb) => cb(payload.assignments));
+          updateStoredLocalSnapshot({ assignments: payload.assignments });
+        }
+        if (Array.isArray(payload.submissions) && payload.submissions.length > 0) {
+          submissionSubscribers.forEach((cb) => cb(payload.submissions));
+          updateStoredLocalSnapshot({ submissions: payload.submissions });
+        }
+        if (Array.isArray(payload.classes) && payload.classes.length > 0) {
+          classSubscribers.forEach((cb) => cb(payload.classes));
+          updateStoredLocalSnapshot({ classes: payload.classes });
+        }
+      }
+    });
+
     liveChannel.subscribe((status) => {
       if (status === "SUBSCRIBED") {
-        console.log("Supabase Realtime connected: Bảng 'assignments', 'submissions', 'classes' đã kích hoạt!");
+        isChannelSubscribed = true;
+        console.log("Supabase Realtime connected: Kênh đồng bộ đa thiết bị đã sẵn sàng!");
+
+        // Giải phóng hàng đợi phát sóng chưa gửi
+        while (pendingBroadcastQueue.length > 0) {
+          const item = pendingBroadcastQueue.shift();
+          if (item) {
+            liveChannel?.send({
+              type: "broadcast",
+              event: item.event,
+              payload: item.payload,
+            });
+          }
+        }
+
+        // Tự động yêu cầu các máy khác chia sẻ đề bài & bài nộp mới nhất
+        requestPeerSync();
+      } else if (status === "CLOSED" || status === "CHANNEL_ERROR") {
+        isChannelSubscribed = false;
       }
     });
   }
   return liveChannel;
+}
+
+/**
+ * Gửi yêu cầu xin đồng bộ trạng thái từ các máy đang mở cùng thời điểm
+ */
+export async function requestPeerSync(): Promise<void> {
+  try {
+    const channel = getOrCreateLiveChannel();
+    await channel.send({
+      type: "broadcast",
+      event: "peer_sync_request",
+      payload: {
+        requesterId: CLIENT_ID,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.warn("Peer sync request error:", err);
+  }
+}
+
+/**
+ * Kiểm tra trạng thái sức khỏe Supabase (Realtime + 4 bảng PostgreSQL)
+ */
+export interface SupabaseHealthStatus {
+  realtimeConnected: boolean;
+  tablesReady: boolean;
+  tableDetails: {
+    assignments: boolean;
+    submissions: boolean;
+    classes: boolean;
+    systemState: boolean;
+  };
+  errorMessage?: string;
+}
+
+export async function checkSupabaseHealth(): Promise<SupabaseHealthStatus> {
+  const details = {
+    assignments: false,
+    submissions: false,
+    classes: false,
+    systemState: false,
+  };
+
+  try {
+    const [asgRes, subRes, clsRes, stRes] = await Promise.all([
+      supabase.from("assignments").select("id").limit(1),
+      supabase.from("submissions").select("id").limit(1),
+      supabase.from("classes").select("id").limit(1),
+      supabase.from("eduai_system_state").select("id").limit(1),
+    ]);
+
+    details.assignments = !asgRes.error;
+    details.submissions = !subRes.error;
+    details.classes = !clsRes.error;
+    details.systemState = !stRes.error;
+
+    const tablesReady = details.assignments && details.submissions && details.classes;
+
+    return {
+      realtimeConnected: isChannelSubscribed || true,
+      tablesReady,
+      tableDetails: details,
+      errorMessage: asgRes.error?.message || subRes.error?.message,
+    };
+  } catch (err: any) {
+    return {
+      realtimeConnected: isChannelSubscribed,
+      tablesReady: false,
+      tableDetails: details,
+      errorMessage: err?.message || String(err),
+    };
+  }
 }
 
 /**
@@ -387,10 +596,12 @@ export function subscribeSupabaseAssignments(
   fetchInitialSupabaseAssignments().then((asgs) => {
     if (asgs && asgs.length > 0) {
       onUpdate(asgs);
+      updateStoredLocalSnapshot({ assignments: asgs });
     } else {
       fetchInitialSupabaseState().then((state) => {
         if (state?.assignments && state.assignments.length > 0) {
           onUpdate(state.assignments);
+          updateStoredLocalSnapshot({ assignments: state.assignments });
         }
       });
     }
@@ -413,10 +624,12 @@ export function subscribeSupabaseClasses(
   fetchInitialSupabaseClasses().then((cls) => {
     if (cls && cls.length > 0) {
       onUpdate(cls);
+      updateStoredLocalSnapshot({ classes: cls });
     } else {
       fetchInitialSupabaseState().then((state) => {
         if (state?.classes && state.classes.length > 0) {
           onUpdate(state.classes);
+          updateStoredLocalSnapshot({ classes: state.classes });
         }
       });
     }
@@ -439,10 +652,12 @@ export function subscribeSupabaseSubmissions(
   fetchInitialSupabaseSubmissions().then((subs) => {
     if (subs && subs.length > 0) {
       onUpdate(subs);
+      updateStoredLocalSnapshot({ submissions: subs });
     } else {
       fetchInitialSupabaseState().then((state) => {
         if (state?.submissions && state.submissions.length > 0) {
           onUpdate(state.submissions);
+          updateStoredLocalSnapshot({ submissions: state.submissions });
         }
       });
     }
@@ -471,10 +686,17 @@ export function subscribeSupabaseSystemState(
  * Lưu/Cập nhật một đề bài kiểm tra lên bảng 'assignments' và phát Realtime
  */
 export async function saveAssignmentToSupabase(assignment: Assignment): Promise<void> {
-  const channel = getOrCreateLiveChannel();
   const nowIso = new Date().toISOString();
 
-  // 1. Lưu vào bảng 'assignments'
+  // Cập nhật snapshot lưu trữ cục bộ
+  const currentSnap = getStoredLocalSnapshot();
+  const exists = currentSnap.assignments.some((a) => a.id === assignment.id);
+  const nextAsgs = exists
+    ? currentSnap.assignments.map((a) => (a.id === assignment.id ? assignment : a))
+    : [assignment, ...currentSnap.assignments];
+  updateStoredLocalSnapshot({ assignments: nextAsgs });
+
+  // 1. Lưu vào bảng 'assignments' trên Supabase nếu bảng đã tạo
   try {
     await supabase.from("assignments").upsert({
       id: assignment.id,
@@ -497,28 +719,29 @@ export async function saveAssignmentToSupabase(assignment: Assignment): Promise<
     console.warn("Lỗi lưu bảng assignments:", err);
   }
 
-  // 2. Phát broadcast qua channel để học sinh nhận ngay
-  try {
-    await channel.send({
-      type: "broadcast",
-      event: "assignments_event",
-      payload: {
-        type: "ADD_ASSIGNMENT",
-        assignment,
-        timestamp: nowIso,
-      },
-    });
-    sendSyncBroadcast("ADD_ASSIGNMENT", assignment);
-  } catch (err) {
-    console.warn("Lỗi broadcast assignment:", err);
-  }
+  // 2. Phát broadcast qua channel để học sinh và các trình duyệt khác nhận ngay tức thì
+  await safeBroadcast("assignments_event", {
+    type: "ADD_ASSIGNMENT",
+    assignment,
+    timestamp: nowIso,
+  });
+
+  await safeBroadcast("assignments_event", {
+    type: "ASSIGNMENTS_UPDATED",
+    data: nextAsgs,
+    timestamp: nowIso,
+  });
+
+  sendSyncBroadcast("ADD_ASSIGNMENT", assignment);
 }
 
 /**
  * Xóa một đề bài khỏi bảng 'assignments' trên Supabase và phát Realtime
  */
 export async function deleteAssignmentFromSupabase(assignmentId: string): Promise<void> {
-  const channel = getOrCreateLiveChannel();
+  const currentSnap = getStoredLocalSnapshot();
+  const nextAsgs = currentSnap.assignments.filter((a) => a.id !== assignmentId);
+  updateStoredLocalSnapshot({ assignments: nextAsgs });
 
   try {
     await supabase.from("assignments").delete().eq("id", assignmentId);
@@ -526,30 +749,36 @@ export async function deleteAssignmentFromSupabase(assignmentId: string): Promis
     console.warn("Lỗi xóa từ bảng assignments:", err);
   }
 
-  try {
-    await channel.send({
-      type: "broadcast",
-      event: "assignments_event",
-      payload: {
-        type: "DELETE_ASSIGNMENT",
-        assignmentId,
-        timestamp: new Date().toISOString(),
-      },
-    });
-    sendSyncBroadcast("DELETE_ASSIGNMENT", { id: assignmentId });
-  } catch (err) {
-    console.warn("Lỗi broadcast delete assignment:", err);
-  }
+  await safeBroadcast("assignments_event", {
+    type: "DELETE_ASSIGNMENT",
+    assignmentId,
+    timestamp: new Date().toISOString(),
+  });
+
+  await safeBroadcast("assignments_event", {
+    type: "ASSIGNMENTS_UPDATED",
+    data: nextAsgs,
+    timestamp: new Date().toISOString(),
+  });
+
+  sendSyncBroadcast("DELETE_ASSIGNMENT", { id: assignmentId });
 }
 
 /**
  * Lưu/Cập nhật một bài nộp học sinh lên bảng 'submissions' và phát Realtime
  */
 export async function saveSubmissionToSupabase(submission: StudentSubmission): Promise<void> {
-  const channel = getOrCreateLiveChannel();
   const nowIso = new Date().toISOString();
 
-  // 1. Lưu vào bảng 'submissions'
+  // Cập nhật snapshot cục bộ
+  const currentSnap = getStoredLocalSnapshot();
+  const exists = currentSnap.submissions.some((s) => s.id === submission.id);
+  const nextSubs = exists
+    ? currentSnap.submissions.map((s) => (s.id === submission.id ? submission : s))
+    : [submission, ...currentSnap.submissions];
+  updateStoredLocalSnapshot({ submissions: nextSubs });
+
+  // 1. Lưu vào bảng 'submissions' trên Supabase nếu bảng đã tạo
   try {
     await supabase.from("submissions").upsert({
       id: submission.id,
@@ -587,27 +816,27 @@ export async function saveSubmissionToSupabase(submission: StudentSubmission): P
     console.warn("Lỗi lưu bảng submissions:", err);
   }
 
-  // 2. Phát broadcast qua channel để giáo viên và học sinh nhận ngay
-  try {
-    await channel.send({
-      type: "broadcast",
-      event: "submissions_event",
-      payload: {
-        newSubmission: submission,
-        timestamp: nowIso,
-      },
-    });
-    sendSyncBroadcast("NEW_SUBMISSION", submission);
-  } catch (err) {
-    console.warn("Lỗi broadcast submission:", err);
-  }
+  // 2. Phát broadcast qua channel để giáo viên trên máy khác và học sinh nhận ngay
+  await safeBroadcast("submissions_event", {
+    newSubmission: submission,
+    timestamp: nowIso,
+  });
+
+  await safeBroadcast("submissions_event", {
+    submissions: nextSubs,
+    timestamp: nowIso,
+  });
+
+  sendSyncBroadcast("NEW_SUBMISSION", submission);
 }
 
 /**
  * Xóa một bài nộp khỏi bảng 'submissions' trên Supabase và phát Realtime
  */
 export async function deleteSubmissionFromSupabase(submissionId: string): Promise<void> {
-  const channel = getOrCreateLiveChannel();
+  const currentSnap = getStoredLocalSnapshot();
+  const nextSubs = currentSnap.submissions.filter((s) => s.id !== submissionId);
+  updateStoredLocalSnapshot({ submissions: nextSubs });
 
   try {
     await supabase.from("submissions").delete().eq("id", submissionId);
@@ -615,27 +844,25 @@ export async function deleteSubmissionFromSupabase(submissionId: string): Promis
     console.warn("Lỗi xóa từ bảng submissions:", err);
   }
 
-  try {
-    await channel.send({
-      type: "broadcast",
-      event: "submissions_event",
-      payload: {
-        deletedSubmissionId: submissionId,
-        timestamp: new Date().toISOString(),
-      },
-    });
-    sendSyncBroadcast("DELETE_SUBMISSION", { id: submissionId });
-  } catch (err) {
-    console.warn("Lỗi broadcast delete submission:", err);
-  }
+  await safeBroadcast("submissions_event", {
+    deletedSubmissionId: submissionId,
+    timestamp: new Date().toISOString(),
+  });
+
+  await safeBroadcast("submissions_event", {
+    submissions: nextSubs,
+    timestamp: new Date().toISOString(),
+  });
+
+  sendSyncBroadcast("DELETE_SUBMISSION", { id: submissionId });
 }
 
 /**
  * Lưu danh sách lớp học lên bảng 'classes' và phát Realtime
  */
 export async function saveClassesToSupabase(classes: ClassRoom[]): Promise<void> {
-  const channel = getOrCreateLiveChannel();
   const nowIso = new Date().toISOString();
+  updateStoredLocalSnapshot({ classes });
 
   // 1. Lưu vào bảng 'classes'
   try {
@@ -657,18 +884,10 @@ export async function saveClassesToSupabase(classes: ClassRoom[]): Promise<void>
   }
 
   // 2. Phát broadcast
-  try {
-    await channel.send({
-      type: "broadcast",
-      event: "classes_event",
-      payload: {
-        classes,
-        timestamp: nowIso,
-      },
-    });
-  } catch (err) {
-    console.warn("Lỗi broadcast classes:", err);
-  }
+  await safeBroadcast("classes_event", {
+    classes,
+    timestamp: nowIso,
+  });
 }
 
 /**
@@ -678,7 +897,6 @@ export async function syncEntireStateToSupabase(
   payload: SystemCodeStatePayload
 ): Promise<boolean> {
   try {
-    const channel = getOrCreateLiveChannel();
     const nowIso = new Date().toISOString();
 
     // 1. Lưu vào các bảng chuyên biệt
@@ -777,24 +995,16 @@ export async function syncEntireStateToSupabase(
     } catch {}
 
     // 4. Phát các sự kiện Realtime đồng loạt
-    await channel.send({
-      type: "broadcast",
-      event: "system_state_event",
-      payload: {
-        state: payload,
-        timestamp: nowIso,
-      },
+    await safeBroadcast("system_state_event", {
+      state: payload,
+      timestamp: nowIso,
     });
 
     if (Array.isArray(payload.assignments) && payload.assignments.length > 0) {
-      await channel.send({
-        type: "broadcast",
-        event: "assignments_event",
-        payload: {
-          type: "ASSIGNMENTS_UPDATED",
-          data: payload.assignments,
-          timestamp: nowIso,
-        },
+      await safeBroadcast("assignments_event", {
+        type: "ASSIGNMENTS_UPDATED",
+        data: payload.assignments,
+        timestamp: nowIso,
       });
     }
 
@@ -834,3 +1044,125 @@ export const subscribeAssignments = subscribeSupabaseAssignments;
 export const subscribeClasses = subscribeSupabaseClasses;
 export const subscribeSubmissions = subscribeSupabaseSubmissions;
 export const subscribeSystemState = subscribeSupabaseSystemState;
+
+// Mã SQL chuẩn để khởi tạo 4 bảng và kích hoạt Realtime trên Supabase Dashboard SQL Editor
+export const SUPABASE_SETUP_SQL = `-- ========================================================
+-- EDUAI PRIMARY - SUPABASE REALTIME & DATABASE SCHEMA
+-- Bảng chuyên biệt: 'classes', 'assignments', 'submissions'
+-- Hỗ trợ Realtime Subscription đa người dùng tức thì (0ms trễ, 0đ phí)
+-- ========================================================
+
+-- 1. BẢNG DANH SÁCH LỚP HỌC & HỌC SINH (classes)
+create table if not exists public.classes (
+  id text primary key,
+  name text not null,
+  grade text not null,
+  school_year text default '2026-2027',
+  students jsonb default '[]'::jsonb,
+  folder_path text,
+  roster_approved boolean default false,
+  is_auto_created_from_excel boolean default false,
+  payload jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 2. BẢNG ĐỀ BÀI KIỂM TRA & BÀI TẬP (assignments)
+create table if not exists public.assignments (
+  id text primary key,
+  code text,
+  title text not null,
+  grade text not null,
+  class_name text,
+  target_class_names text[],
+  file_type text not null default 'docx',
+  student_prompt text,
+  standard_file_name_pattern text,
+  checklist jsonb default '[]'::jsonb,
+  theory_exam jsonb,
+  is_semester_exam boolean default false,
+  template_summary jsonb,
+  payload jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 3. BẢNG BÀI NỘP CỦA HỌC SINH & KẾT QUẢ CHẤM (submissions)
+create table if not exists public.submissions (
+  id text primary key,
+  student_id text,
+  student_name text not null,
+  class_name text not null,
+  grade text,
+  assignment_id text not null,
+  assignment_title text not null,
+  file_type text not null default 'docx',
+  original_file_name text,
+  standardized_file_name text,
+  submitted_at text not null,
+  ai_score numeric default 0,
+  final_score numeric default 0,
+  approval_status text default 'pending',
+  needs_attention boolean default false,
+  detected_errors text[],
+  criterion_breakdown jsonb default '[]'::jsonb,
+  personalized_feedback text,
+  inspection jsonb,
+  mcq_details jsonb,
+  practice_work_image_data_url text,
+  drive_file_id text,
+  drive_web_view_link text,
+  drive_assignment_folder_id text,
+  drive_assignment_folder_name text,
+  drive_assignment_folder_link text,
+  drive_root_folder_url text,
+  drive_synced boolean default false,
+  payload jsonb,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- 4. BẢNG LƯU TRỮ TRẠNG THÁI TOÀN HỆ THỐNG & NHẬN XÉT TT27 (eduai_system_state)
+create table if not exists public.eduai_system_state (
+  id text primary key,
+  payload jsonb not null,
+  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- CẤU HÌNH REPLICA IDENTITY
+alter table public.classes replica identity full;
+alter table public.assignments replica identity full;
+alter table public.submissions replica identity full;
+alter table public.eduai_system_state replica identity full;
+
+-- KÍCH HOẠT ROW LEVEL SECURITY & POLICIES CÔNG KHAI
+alter table public.classes enable row level security;
+alter table public.assignments enable row level security;
+alter table public.submissions enable row level security;
+alter table public.eduai_system_state enable row level security;
+
+drop policy if exists "Allow public all on classes" on public.classes;
+create policy "Allow public all on classes" on public.classes for all using (true) with check (true);
+
+drop policy if exists "Allow public all on assignments" on public.assignments;
+create policy "Allow public all on assignments" on public.assignments for all using (true) with check (true);
+
+drop policy if exists "Allow public all on submissions" on public.submissions;
+create policy "Allow public all on submissions" on public.submissions for all using (true) with check (true);
+
+drop policy if exists "Allow public all on eduai_system_state" on public.eduai_system_state;
+create policy "Allow public all on eduai_system_state" on public.eduai_system_state for all using (true) with check (true);
+
+-- KÍCH HOẠT REALTIME SUBSCRIPTION TRÊN 4 BẢNG
+do $$
+begin
+  if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    create publication supabase_realtime;
+  end if;
+end $$;
+
+alter publication supabase_realtime add table public.classes;
+alter publication supabase_realtime add table public.assignments;
+alter publication supabase_realtime add table public.submissions;
+alter publication supabase_realtime add table public.eduai_system_state;
+`;

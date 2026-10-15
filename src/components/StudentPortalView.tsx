@@ -23,13 +23,14 @@ import {
   ExternalLink,
   Image as ImageIcon,
   Lock,
+  RefreshCw,
 } from "lucide-react";
 import {
   Assignment,
   ExtractedInspection,
   StudentSubmission,
 } from "../types/grading";
-import { saveSubmissionToSupabase } from "../services/supabaseService";
+import { saveSubmissionToSupabase, requestPeerSync } from "../services/supabaseService";
 import {
   analyzeSubmissionAndWriteTeacherFeedback,
   ensureTeacherPersonaThay,
@@ -133,6 +134,16 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
   const [driveErrorNotice, setDriveErrorNotice] = useState<string | null>(null);
   const [preUploadedDriveResult, setPreUploadedDriveResult] =
     useState<DriveUploadResult | null>(null);
+
+  const [isSyncingFromTeacher, setIsSyncingFromTeacher] = useState<boolean>(false);
+  const handleSyncFromTeacher = async () => {
+    setIsSyncingFromTeacher(true);
+    try {
+      await requestPeerSync();
+    } finally {
+      setTimeout(() => setIsSyncingFromTeacher(false), 800);
+    }
+  };
 
   const resetCurrentAttempt = () => {
     setUploadedFile(null);
@@ -1078,13 +1089,39 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
         <>
           {/* Step 3: Assignment Picker for this Class Grade */}
           <div className="space-y-3">
-            <h3 className="text-base font-bold text-slate-900">
-              3. Bài tập được giao dành riêng cho {currentClass?.name} ({currentClass?.grade}):
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h3 className="text-base font-bold text-slate-900">
+                3. Bài tập được giao dành riêng cho {currentClass?.name} ({currentClass?.grade}):
+              </h3>
+              <button
+                type="button"
+                onClick={handleSyncFromTeacher}
+                disabled={isSyncingFromTeacher}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#0284C7] bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition-colors cursor-pointer self-start sm:self-auto shadow-xs"
+                title="Đồng bộ ngay đề kiểm tra mới nhất từ máy Thầy qua Supabase Realtime"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFromTeacher ? "animate-spin" : ""}`} />
+                <span>{isSyncingFromTeacher ? "Đang nhận đề mới..." : "Nhận đề mới từ Thầy (Realtime)"}</span>
+              </button>
+            </div>
 
             {classAssignments.length === 0 ? (
-              <div className="p-8 bg-white border border-slate-200 rounded-2xl text-center text-slate-500 text-xs">
-                Chưa có bài tập nào được giao cho khối {currentClass?.grade}.
+              <div className="p-8 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-center space-y-3">
+                <p className="text-sm font-semibold text-slate-800">
+                  Chưa có bài tập nào được giao riêng cho lớp {currentClass?.name} ({currentClass?.grade}).
+                </p>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Tổng số bài tập trong hệ thống: <strong>{assignments.length} đề</strong>. Nếu Thầy vừa giao bài từ máy tính khác, em hãy bấm nút dưới đây để cập nhật ngay nhé!
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSyncFromTeacher}
+                  disabled={isSyncingFromTeacher}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl cursor-pointer shadow-xs transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingFromTeacher ? "animate-spin" : ""}`} />
+                  <span>{isSyncingFromTeacher ? "Đang đồng bộ..." : "Nhận đề bài mới từ Thầy ngay"}</span>
+                </button>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
