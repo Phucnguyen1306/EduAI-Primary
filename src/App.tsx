@@ -26,6 +26,7 @@ import {
   Clock,
   FolderSync,
   Database,
+  Info,
 } from "lucide-react";
 import {
   INITIAL_ASSIGNMENTS,
@@ -140,6 +141,7 @@ export default function App() {
 
   // Quản lý Trạng thái & Hộp thoại Supabase Realtime & Cloud Database
   const [showSupabaseModal, setShowSupabaseModal] = useState<boolean>(false);
+  const [showAppInfoModal, setShowAppInfoModal] = useState<boolean>(false);
   const [supabaseHealth, setSupabaseHealth] = useState<SupabaseHealthStatus | null>(null);
 
   useEffect(() => {
@@ -2173,27 +2175,91 @@ export default function App() {
         onClose={() => setShowSupabaseModal(false)}
       />
 
-      {/* System Footer */}
-      <footer className="bg-white border-t border-slate-200 py-5 px-6 mt-12">
-        <div className="max-w-7xl mx-auto flex flex-col items-center justify-between gap-2 text-center sm:flex-row sm:text-left">
-          <div className="space-y-1">
-            <div className="text-xs font-bold text-slate-900">
-              EduAI Primary — Hệ thống Quản lý &amp; Chấm bài Tin học Thông minh dành cho Tiểu học (Lớp 3, 4, 5)
+      {/* System Footer - Compact & Discreet */}
+      <footer className="py-4 px-6 border-t border-slate-100 flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span className="font-medium text-slate-500">EduAI Primary · Khảo thí &amp; Chấm bài Tin học Tiểu học</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAppInfoModal(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-500 hover:text-[#0284C7] hover:bg-sky-50 rounded-xl transition-all cursor-pointer font-semibold shadow-2xs border border-slate-200 bg-white"
+          title="Bấm để xem Thông tin ứng dụng, tác giả phần mềm & căn cứ Thông tư 27"
+        >
+          <Info className="w-3.5 h-3.5 text-[#0284C7]" />
+          <span>ℹ️ Thông tin ứng dụng</span>
+        </button>
+      </footer>
+
+      {/* Modal Thông tin Ứng dụng & Bản quyền Tinh tế */}
+      {showAppInfoModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 text-white flex items-center justify-center font-bold text-lg shadow-xs">
+                  🤖
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    EduAI Primary
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Hệ thống Khảo thí &amp; Chấm bài Tin học Tiểu học Thông minh (Lớp 3, 4, 5)
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAppInfoModal(false)}
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer font-bold text-sm"
+              >
+                ✕
+              </button>
             </div>
-            <div className="text-xs font-medium text-slate-700">
-              Được tạo bởi ý tưởng phần mềm của{" "}
-              <strong className="text-[#0284C7]">Thầy Nguyễn Văn Phúc</strong> -{" "}
-              <strong className="text-slate-900">
-                Trường TH-THCS Vĩnh Phú, Phường Lái Thiêu, Thành phố Hồ Chí Minh
-              </strong>
-              . <strong className="text-emerald-700">Năm học 2026-2027</strong>
+
+            <div className="space-y-3.5 text-xs text-slate-700 leading-relaxed">
+              <div className="p-3.5 bg-sky-50/80 border border-sky-200 rounded-xl space-y-1">
+                <span className="font-bold text-[#0284C7] block uppercase tracking-wider text-[11px]">
+                  Ý tưởng &amp; Bản quyền phần mềm
+                </span>
+                <p className="text-sm font-bold text-slate-900">
+                  Thầy Nguyễn Văn Phúc
+                </p>
+                <p className="text-xs text-slate-700 font-medium">
+                  Trường TH-THCS Vĩnh Phú, Phường Lái Thiêu, Thành phố Hồ Chí Minh
+                </p>
+                <p className="text-[11px] font-bold text-emerald-700 mt-1">
+                  Niên khóa 2026 - 2027
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="font-bold text-slate-900 block">
+                  Tiêu chuẩn chuyên môn &amp; Tính năng:
+                </span>
+                <ul className="list-disc list-inside space-y-1 text-slate-600">
+                  <li>Tạo đề thi học kỳ chuẩn ma trận 3 mức nhận thức theo SGK Kết nối tri thức.</li>
+                  <li>Tự động chấm &amp; bóc tách cấu trúc file thực hành Word (.docx), PowerPoint (.pptx), Scratch (.sb3).</li>
+                  <li>Chấm tự luận theo ngữ nghĩa NLP &amp; đánh giá phẩm chất, năng lực theo Thông tư 27/2020/TT-BGDĐT.</li>
+                  <li>Đồng bộ đa thiết bị không giới hạn và thời gian thực qua Supabase Cloud Database &amp; Realtime.</li>
+                </ul>
+              </div>
             </div>
-          </div>
-          <div className="text-xs text-slate-500 shrink-0">
-            Hỗ trợ chấm tự động Word (.docx), PowerPoint (.pptx), Scratch (.sb3) &amp; Đánh giá Thông tư 27
+
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAppInfoModal(false)}
+                className="px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-xl cursor-pointer shadow-xs"
+              >
+                Đóng cửa sổ
+              </button>
+            </div>
           </div>
         </div>
-      </footer>
+      )}
     </div>
   );
 }

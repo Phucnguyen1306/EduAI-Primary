@@ -129,3 +129,26 @@ alter publication supabase_realtime add table public.classes;
 alter publication supabase_realtime add table public.assignments;
 alter publication supabase_realtime add table public.submissions;
 alter publication supabase_realtime add table public.eduai_system_state;
+
+-- ========================================================
+-- 5. BẢNG GHI CHÚ (notes)
+-- ========================================================
+create table if not exists public.notes (
+  id bigint primary key generated always as identity,
+  title text not null
+);
+
+alter table public.notes enable row level security;
+
+drop policy if exists "public can read notes" on public.notes;
+create policy "public can read notes"
+on public.notes
+for select to anon
+using (true);
+
+drop policy if exists "Allow public all on notes" on public.notes;
+create policy "Allow public all on notes" on public.notes for all using (true) with check (true);
+
+alter publication supabase_realtime add table public.notes;
+
+

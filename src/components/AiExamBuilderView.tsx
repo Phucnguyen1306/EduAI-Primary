@@ -1196,6 +1196,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   );
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [confirmingDeleteAsgId, setConfirmingDeleteAsgId] = useState<string | null>(null);
+  const [generatingIllustrationMap, setGeneratingIllustrationMap] = useState<Record<string, boolean>>({});
 
   // Tự động lưu nháp cấu hình & đề đang soạn/chỉnh sửa mỗi khi giáo viên thao tác
   useEffect(() => {
@@ -3017,23 +3018,79 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   };
 
   /**
-   * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Trắc nghiệm)
-   * Nhận vào nội dung gợi ý/mô tả tạo ảnh và vẽ lại hình ảnh phù hợp nhất với câu hỏi
+   * ĐỌC VĂN BẢN TRONG Ô GỢI Ý (Web Speech API) & THÔNG BÁO CHO NGƯỜI DÙNG
    */
-  const handleRegenerateMcqIllustrationFromPrompt = (qIdx: number, customPrompt?: string) => {
+  const speakIllustrationPrompt = (promptText: string, contextTitle: string = "") => {
+    try {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+        const trimmed = promptText.trim();
+        const textToRead = trimmed
+          ? `Đang đọc gợi ý tạo ảnh: ${trimmed}`
+          : `Đang đọc nội dung ${contextTitle || "câu hỏi"} để tạo ảnh`;
+        const utterance = new SpeechSynthesisUtterance(textToRead);
+        utterance.lang = "vi-VN";
+        utterance.rate = 1.0;
+        utterance.pitch = 1.0;
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch (err) {
+      console.warn("Speech synthesis error:", err);
+    }
+  };
+
+  /**
+   * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Trắc nghiệm)
+   * Đọc nội dung văn bản đang nằm trong ô gợi ý, AI tự động tạo ra hình mới theo gợi ý
+   */
+  const handleRegenerateMcqIllustrationFromPrompt = async (qIdx: number, customPrompt?: string) => {
     if (!generatedAssignment?.theoryExam) return;
     const exam = generatedAssignment.theoryExam;
     const targetQ = exam.multipleChoice[qIdx];
     if (!targetQ) return;
-    const promptText = (customPrompt !== undefined ? customPrompt : targetQ.illustrationNote || "").trim() || targetQ.question;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetQ.illustrationNote || "").trim();
+    const effectivePrompt = promptText || targetQ.question;
+    const cleanNote = cleanIllustrationCaption(effectivePrompt, targetQ.question);
+    const key = `mcq-${qIdx}`;
+
+    // Đọc nội dung gợi ý bằng giọng nói và hiển thị thanh thông báo trực quan
+    speakIllustrationPrompt(cleanNote, `Câu ${qIdx + 1}`);
+
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: true }));
+    setSavedNotice(`AI đang đọc gợi ý: "${cleanNote}" và vẽ ảnh mới cho Câu ${qIdx + 1}...`);
+
+    let nextDataUrl = "";
+    try {
+      const res = await fetch("/api/ai/generate-illustration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          promptText: cleanNote,
+          contextText: targetQ.question,
+          grade: generatedAssignment.grade,
+          variant: (targetQ.illustrationVariant ?? 0) + 1,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.dataUrl) {
+          nextDataUrl = data.dataUrl;
+        }
+      }
+    } catch (err) {
+      console.warn("AI generation network error, using local illustration engine:", err);
+    }
+
     const nextVariant = ((targetQ.illustrationVariant ?? 0) + 1) % 5;
-    const cleanNote = cleanIllustrationCaption(promptText, targetQ.question);
-    const nextDataUrl = generateIllustrationDataUrl(
-      targetQ.question,
-      cleanNote,
-      nextVariant,
-      generatedAssignment.grade
-    );
+    if (!nextDataUrl) {
+      nextDataUrl = generateIllustrationDataUrl(
+        targetQ.question,
+        cleanNote,
+        nextVariant,
+        generatedAssignment.grade
+      );
+    }
+
     const nextMcqs = exam.multipleChoice.map((q, idx) =>
       idx === qIdx
         ? {
@@ -3046,7 +3103,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         : q
     );
     syncTheoryExamAndChecklist({ ...exam, multipleChoice: nextMcqs });
-    setSavedNotice(`Đã tạo lại ảnh minh họa cho Câu ${qIdx + 1} theo gợi ý: "${cleanNote}"!`);
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: false }));
+    setSavedNotice(`AI đã tạo thành công ảnh minh họa mới cho Câu ${qIdx + 1} theo gợi ý: "${cleanNote}"!`);
   };
 
   const handleCycleEssayIllustration = (eIdx: number) => {
@@ -3140,22 +3198,57 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
   /**
    * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Tự luận)
+   * Đọc nội dung văn bản đang nằm trong ô gợi ý, AI tự động tạo ra hình mới theo gợi ý
    */
-  const handleRegenerateEssayIllustrationFromPrompt = (eIdx: number, customPrompt?: string) => {
+  const handleRegenerateEssayIllustrationFromPrompt = async (eIdx: number, customPrompt?: string) => {
     if (!generatedAssignment?.theoryExam) return;
     const exam = generatedAssignment.theoryExam;
     const currentEssays = getActiveShortAnswers(exam);
     const targetEq = currentEssays[eIdx];
     if (!targetEq) return;
-    const promptText = (customPrompt !== undefined ? customPrompt : targetEq.illustrationNote || "").trim() || targetEq.question;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetEq.illustrationNote || "").trim();
+    const effectivePrompt = promptText || targetEq.question;
+    const cleanNote = cleanIllustrationCaption(effectivePrompt, targetEq.question);
+    const key = `essay-${eIdx}`;
+
+    // Đọc nội dung gợi ý bằng giọng nói và hiển thị thanh thông báo trực quan
+    speakIllustrationPrompt(cleanNote, `Câu Tự luận ${eIdx + 1}`);
+
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: true }));
+    setSavedNotice(`AI đang đọc gợi ý: "${cleanNote}" và vẽ ảnh mới cho Câu Tự luận ${eIdx + 1}...`);
+
+    let nextDataUrl = "";
+    try {
+      const res = await fetch("/api/ai/generate-illustration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          promptText: cleanNote,
+          contextText: targetEq.question,
+          grade: generatedAssignment.grade,
+          variant: (targetEq.illustrationVariant ?? 0) + 1,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.dataUrl) {
+          nextDataUrl = data.dataUrl;
+        }
+      }
+    } catch (err) {
+      console.warn("AI generation network error, using local illustration engine:", err);
+    }
+
     const nextVariant = ((targetEq.illustrationVariant ?? 0) + 1) % 5;
-    const cleanNote = cleanIllustrationCaption(promptText, targetEq.question);
-    const nextDataUrl = generateIllustrationDataUrl(
-      targetEq.question,
-      cleanNote,
-      nextVariant,
-      generatedAssignment.grade
-    );
+    if (!nextDataUrl) {
+      nextDataUrl = generateIllustrationDataUrl(
+        targetEq.question,
+        cleanNote,
+        nextVariant,
+        generatedAssignment.grade
+      );
+    }
+
     const nextEssays = currentEssays.map((eq, idx) =>
       idx === eIdx
         ? {
@@ -3172,7 +3265,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
       shortAnswers: nextEssays,
       shortAnswer: nextEssays[0] || exam.shortAnswer,
     });
-    setSavedNotice(`Đã tạo lại ảnh minh họa cho Câu Tự luận ${eIdx + 1} theo gợi ý: "${cleanNote}"!`);
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: false }));
+    setSavedNotice(`AI đã tạo thành công ảnh minh họa mới cho Câu Tự luận ${eIdx + 1} theo gợi ý: "${cleanNote}"!`);
   };
 
   const handleUploadEssayCustomImage = (
@@ -3303,22 +3397,57 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
 
   /**
    * TẠO LẠI ẢNH THEO GỢI Ý CỦA GIÁO VIÊN (Thực hành)
+   * Đọc nội dung văn bản đang nằm trong ô gợi ý, AI tự động tạo ra hình mới theo gợi ý
    */
-  const handleRegeneratePracticeIllustrationFromPrompt = (pIdx: number, customPrompt?: string) => {
+  const handleRegeneratePracticeIllustrationFromPrompt = async (pIdx: number, customPrompt?: string) => {
     if (!generatedAssignment?.theoryExam?.semesterBlueprint) return;
     const exam = generatedAssignment.theoryExam;
     const bp = exam.semesterBlueprint!;
     const targetPt = bp.practiceTasks[pIdx];
     if (!targetPt) return;
-    const promptText = (customPrompt !== undefined ? customPrompt : targetPt.illustrationNote || "").trim() || `${targetPt.title} ${targetPt.instructions}`;
+    const promptText = (customPrompt !== undefined ? customPrompt : targetPt.illustrationNote || "").trim();
+    const effectivePrompt = promptText || `${targetPt.title} ${targetPt.instructions}`;
+    const cleanNote = cleanIllustrationCaption(effectivePrompt, targetPt.title);
+    const key = `practice-${pIdx}`;
+
+    // Đọc nội dung gợi ý bằng giọng nói và hiển thị thanh thông báo trực quan
+    speakIllustrationPrompt(cleanNote, `Bài thực hành ${pIdx + 1}`);
+
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: true }));
+    setSavedNotice(`AI đang đọc gợi ý: "${cleanNote}" và vẽ ảnh mới cho Bài thực hành ${pIdx + 1}...`);
+
+    let nextDataUrl = "";
+    try {
+      const res = await fetch("/api/ai/generate-illustration", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          promptText: cleanNote,
+          contextText: `${targetPt.title} - ${targetPt.instructions}`,
+          grade: generatedAssignment.grade,
+          variant: (targetPt.illustrationVariant ?? 0) + 1,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.dataUrl) {
+          nextDataUrl = data.dataUrl;
+        }
+      }
+    } catch (err) {
+      console.warn("AI generation network error, using local illustration engine:", err);
+    }
+
     const nextVariant = ((targetPt.illustrationVariant ?? 0) + 1) % 5;
-    const cleanNote = cleanIllustrationCaption(promptText, targetPt.title);
-    const nextDataUrl = generateIllustrationDataUrl(
-      `${targetPt.title} ${targetPt.instructions}`,
-      cleanNote,
-      nextVariant,
-      generatedAssignment.grade
-    );
+    if (!nextDataUrl) {
+      nextDataUrl = generateIllustrationDataUrl(
+        `${targetPt.title} ${targetPt.instructions}`,
+        cleanNote,
+        nextVariant,
+        generatedAssignment.grade
+      );
+    }
+
     const nextTasks = bp.practiceTasks.map((pt, idx) =>
       idx === pIdx
         ? {
@@ -3337,7 +3466,8 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
         practiceTasks: nextTasks,
       },
     });
-    setSavedNotice(`Đã tạo lại ảnh minh họa cho Bài thực hành ${pIdx + 1} theo gợi ý: "${cleanNote}"!`);
+    setGeneratingIllustrationMap((prev) => ({ ...prev, [key]: false }));
+    setSavedNotice(`AI đã tạo thành công ảnh minh họa mới cho Bài thực hành ${pIdx + 1} theo gợi ý: "${cleanNote}"!`);
   };
 
   const handleUploadPracticeCustomImage = (
@@ -4880,22 +5010,33 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             </div>
                           </div>
 
-                          {!q.hasNoIllustration && q.illustrationImageDataUrl && (
-                            <div className="relative group flex items-center justify-center bg-white p-2 rounded-lg border border-sky-200">
-                              <img
-                                src={q.illustrationImageDataUrl}
-                                alt="Minh họa câu hỏi"
-                                className="max-h-40 rounded-lg object-contain"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveMcqIllustration(idx)}
-                                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
-                                title="Xóa hình minh họa cho câu hỏi này"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                Xóa hình này
-                              </button>
+                          {!q.hasNoIllustration && (q.illustrationImageDataUrl || generatingIllustrationMap[`mcq-${idx}`]) && (
+                            <div className="relative group flex items-center justify-center bg-white p-2 rounded-lg border border-sky-200 min-h-[140px]">
+                              {generatingIllustrationMap[`mcq-${idx}`] ? (
+                                <div className="flex flex-col items-center justify-center p-6 space-y-2 text-sky-700 animate-in fade-in duration-200">
+                                  <Loader2 className="w-8 h-8 animate-spin text-[#0284C7]" />
+                                  <span className="text-xs font-bold animate-pulse text-center">
+                                    AI đang đọc gợi ý và vẽ ảnh minh họa mới...
+                                  </span>
+                                </div>
+                              ) : (
+                                <>
+                                  <img
+                                    src={q.illustrationImageDataUrl}
+                                    alt="Minh họa câu hỏi"
+                                    className="max-h-40 rounded-lg object-contain"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveMcqIllustration(idx)}
+                                    className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
+                                    title="Xóa hình minh họa cho câu hỏi này"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    Xóa hình này
+                                  </button>
+                                </>
+                              )}
                             </div>
                           )}
 
@@ -4907,7 +5048,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                 <span>Gợi ý nội dung tạo ảnh minh họa cho câu hỏi:</span>
                               </label>
                               <span className="text-[10px] text-slate-500 hidden sm:inline">
-                                Gõ mô tả và bấm nút để hệ thống tự động vẽ lại hình phù hợp
+                                Gõ mô tả và bấm nút để AI tự động vẽ lại hình mới theo gợi ý
                               </span>
                             </div>
 
@@ -4934,12 +5075,22 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                               />
                               <button
                                 type="button"
+                                disabled={Boolean(generatingIllustrationMap[`mcq-${idx}`])}
                                 onClick={() => handleRegenerateMcqIllustrationFromPrompt(idx)}
-                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
-                                title="Bấm để tạo lại hình ảnh minh họa phù hợp với gợi ý vừa nhập"
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-60 disabled:cursor-not-allowed rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                title="Bấm để AI đọc nội dung trong ô gợi ý và tạo lại ảnh mới"
                               >
-                                <Sparkles className="w-3.5 h-3.5" />
-                                <span>Tạo lại ảnh theo gợi ý</span>
+                                {generatingIllustrationMap[`mcq-${idx}`] ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>AI đang tạo ảnh...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>Tạo lại ảnh theo gợi ý</span>
+                                  </>
+                                )}
                               </button>
                             </div>
                           </div>
@@ -5185,22 +5336,33 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                             </div>
                           </div>
 
-                          {!sa.hasNoIllustration && sa.illustrationImageDataUrl && (
-                            <div className="relative group bg-slate-50 p-2 rounded-lg border border-sky-200 flex justify-center">
-                              <img
-                                src={sa.illustrationImageDataUrl}
-                                alt={`Minh họa tự luận ${sIdx + 1}`}
-                                className="max-h-40 rounded-lg object-contain"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveEssayIllustration(sIdx)}
-                                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
-                                title="Xóa hình minh họa cho câu hỏi này"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                                Xóa hình này
-                              </button>
+                          {!sa.hasNoIllustration && (sa.illustrationImageDataUrl || generatingIllustrationMap[`essay-${sIdx}`]) && (
+                            <div className="relative group bg-slate-50 p-2 rounded-lg border border-sky-200 flex items-center justify-center min-h-[140px]">
+                              {generatingIllustrationMap[`essay-${sIdx}`] ? (
+                                <div className="flex flex-col items-center justify-center p-6 space-y-2 text-sky-700 animate-in fade-in duration-200">
+                                  <Loader2 className="w-8 h-8 animate-spin text-[#0284C7]" />
+                                  <span className="text-xs font-bold animate-pulse text-center">
+                                    AI đang đọc gợi ý và vẽ ảnh minh họa mới...
+                                  </span>
+                                </div>
+                              ) : (
+                                <>
+                                  <img
+                                    src={sa.illustrationImageDataUrl}
+                                    alt={`Minh họa tự luận ${sIdx + 1}`}
+                                    className="max-h-40 rounded-lg object-contain"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveEssayIllustration(sIdx)}
+                                    className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-md shadow-sm transition-opacity opacity-90 group-hover:opacity-100 cursor-pointer"
+                                    title="Xóa hình minh họa cho câu hỏi này"
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                    Xóa hình này
+                                  </button>
+                                </>
+                              )}
                             </div>
                           )}
 
@@ -5212,7 +5374,7 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                 <span>Gợi ý nội dung tạo ảnh minh họa cho câu tự luận:</span>
                               </label>
                               <span className="text-[10px] text-slate-500 hidden sm:inline">
-                                Gõ mô tả và bấm nút để hệ thống tự động vẽ lại hình phù hợp
+                                Gõ mô tả và bấm nút để AI tự động vẽ lại hình mới theo gợi ý
                               </span>
                             </div>
 
@@ -5244,12 +5406,22 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                               />
                               <button
                                 type="button"
+                                disabled={Boolean(generatingIllustrationMap[`essay-${sIdx}`])}
                                 onClick={() => handleRegenerateEssayIllustrationFromPrompt(sIdx)}
-                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
-                                title="Bấm để tạo lại hình ảnh minh họa phù hợp với gợi ý vừa nhập"
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-[#0284C7] hover:bg-[#0369A1] disabled:opacity-60 disabled:cursor-not-allowed rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                title="Bấm để AI đọc nội dung trong ô gợi ý và tạo lại ảnh mới"
                               >
-                                <Sparkles className="w-3.5 h-3.5" />
-                                <span>Tạo lại ảnh theo gợi ý</span>
+                                {generatingIllustrationMap[`essay-${sIdx}`] ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>AI đang tạo ảnh...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Sparkles className="w-3.5 h-3.5" />
+                                    <span>Tạo lại ảnh theo gợi ý</span>
+                                  </>
+                                )}
                               </button>
                             </div>
                           </div>
@@ -5538,12 +5710,22 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
                                 />
                                 <button
                                   type="button"
+                                  disabled={Boolean(generatingIllustrationMap[`practice-${pIdx}`])}
                                   onClick={() => handleRegeneratePracticeIllustrationFromPrompt(pIdx)}
-                                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
-                                  title="Bấm để tạo lại hình ảnh minh họa bài thực hành phù hợp với gợi ý vừa nhập"
+                                  className="inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-60 disabled:cursor-not-allowed rounded-lg shadow-xs transition-all cursor-pointer shrink-0 whitespace-nowrap active:scale-95"
+                                  title="Bấm để AI đọc nội dung trong ô gợi ý và tạo lại ảnh thực hành mới"
                                 >
-                                  <Sparkles className="w-3.5 h-3.5" />
-                                  <span>Tạo lại ảnh theo gợi ý</span>
+                                  {generatingIllustrationMap[`practice-${pIdx}`] ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      <span>AI đang tạo ảnh...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Sparkles className="w-3.5 h-3.5" />
+                                      <span>Tạo lại ảnh theo gợi ý</span>
+                                    </>
+                                  )}
                                 </button>
                               </div>
                             </div>

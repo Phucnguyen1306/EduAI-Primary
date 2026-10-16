@@ -436,6 +436,59 @@ Quy tắc bắt buộc:
     }
   });
 
+  // 1.0 AI Tạo lại hình ảnh minh họa theo Gợi ý nội dung của giáo viên
+  app.post("/api/ai/generate-illustration", async (req, res) => {
+    try {
+      const { promptText, contextText = "", grade = "Lớp 4", variant = 0 } = req.body;
+      const cleanPrompt = String(promptText || contextText || "").trim();
+      if (!cleanPrompt) {
+        return res.status(400).json({ error: "Thiếu nội dung gợi ý tạo ảnh" });
+      }
+
+      const aiPrompt = `Bạn là họa sĩ thiết kế đồ họa vector giáo dục môn Tin học Tiểu học (Bộ sách Kết nối tri thức với cuộc sống).
+Nhiệm vụ: Hãy tạo một hình ảnh minh họa vector SVG đẹp, trực quan, sinh động (viewBox="0 0 600 360", width="100%", height="100%") bám sát 100% vào nội dung gợi ý tạo ảnh dưới đây:
+
+[GỢI Ý NỘI DUNG TẠO ẢNH CỦA GIÁO VIÊN]: "${cleanPrompt}"
+[NGỮ CẢNH CÂU HỎI]: "${contextText || cleanPrompt}"
+[KHỐI LỚP]: ${grade}
+
+Yêu cầu kỹ thuật:
+1. Trả về DUY NHẤT một khối mã SVG hợp lệ bắt đầu bằng <svg viewBox="0 0 600 360" xmlns="http://www.w3.org/2000/svg"> và kết thúc bằng </svg>. Tuyệt đối KHÔNG kèm markdown (\`\`\`xml hoặc \`\`\`svg), không viết lời dẫn hay giải thích gì thêm.
+2. Thiết kế vector hiện đại, màu sắc tươi sáng, các chi tiết đồ họa sắc nét, sinh động, chuẩn xác cho học sinh tiểu học:
+   - Nếu gợi ý liên quan đến chuột máy tính: vẽ con chuột máy tính rõ ràng, làm nổi bật nút chuột trái/phải, con lăn, hiệu ứng sóng nhấp nháy hoặc bàn tay cầm chuột.
+   - Nếu gợi ý liên quan đến bàn phím: vẽ bàn phím hoặc hàng phím cơ sở với phím F và J có gờ nổi bật, các phím gõ rõ ràng.
+   - Nếu gợi ý liên quan đến Scratch: vẽ chú mèo Scratch, các khối lệnh ghép khít nhau (khối sự kiện màu vàng, chuyển động màu xanh dương, vòng lặp màu cam...).
+   - Nếu gợi ý liên quan đến Word/soạn thảo: vẽ thanh công cụ Word, các nút định dạng phông chữ, cỡ chữ, căn lề, in đậm, chèn bảng.
+   - Nếu gợi ý liên quan đến PowerPoint: vẽ trang chiếu slide sinh động, khung tiêu đề, hình ảnh, hiệu ứng chuyển trang.
+   - Nếu gợi ý liên quan đến thư mục/tệp: vẽ cây thư mục Windows hoặc các thư mục màu vàng rực rỡ, tệp tài liệu.
+   - Nếu gợi ý liên quan đến Paint: vẽ hộp màu, bút vẽ, cọ vẽ, hình vẽ sinh động.
+   - Nếu gợi ý liên quan đến thiết bị phần cứng/tư thế ngồi: vẽ màn hình, thân máy, bàn phím, chuột hoặc tư thế ngồi chuẩn 50-80cm.
+3. Mã SVG hợp lệ, không dùng thẻ <script>, chỉ sử dụng các thẻ đồ họa chuẩn (<rect>, <circle>, <path>, <text>, <g>, <defs>, <linearGradient>,...).
+`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: aiPrompt,
+      });
+
+      let rawSvg = response.text || "";
+      if (rawSvg.includes("```")) {
+        rawSvg = rawSvg.replace(/```(?:svg|xml)?/gi, "").replace(/```/g, "").trim();
+      }
+      const svgMatch = rawSvg.match(/<svg[\s\S]*<\/svg>/i);
+      if (svgMatch) {
+        rawSvg = svgMatch[0];
+        const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(rawSvg)}`;
+        return res.json({ dataUrl, source: "gemini_ai", prompt: cleanPrompt });
+      }
+
+      return res.json({ error: "Không tìm thấy thẻ svg hợp lệ", source: "fallback" });
+    } catch (err: any) {
+      console.error("Error in /api/ai/generate-illustration:", err);
+      return res.status(500).json({ error: err?.message || "Lỗi tạo ảnh AI" });
+    }
+  });
+
 
   // 1. AI Sinh đề Lý thuyết (Trắc nghiệm + Tự luận ngắn NLP) theo Chương trình GDPT 2018 & Tài liệu khác (Ma trận / PDF / Đề mẫu)
   app.post("/api/ai/generate-exam", async (req, res) => {

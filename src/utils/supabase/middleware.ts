@@ -3,14 +3,17 @@ import { createServerClient } from "@supabase/ssr";
 const supabaseUrl =
   process.env.SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_EduAI_SUPABASE_URL ||
   process.env.VITE_SUPABASE_URL ||
-  "https://mlhqpppvglhoivzrcyhz.supabase.co";
+  "https://nyoemrzlqjtkyxozxjch.supabase.co";
 
 const supabaseKey =
   process.env.SUPABASE_ANON_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.NEXT_PUBLIC_EduAI_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.NEXT_PUBLIC_EduAI_SUPABASE_ANON_KEY ||
   process.env.VITE_SUPABASE_ANON_KEY ||
-  "sb_publishable_WeqcBfP4EoyxIgTF9OIjSg_5lJ6mf13";
+  "sb_publishable_FiESbC5VgcMjvX-FagT0IQ_9SCm61JL";
 
 /**
  * Supabase session refresher helper for HTTP middleware & Express requests

@@ -7,14 +7,19 @@ import { sendSyncBroadcast } from "../utils/broadcastSync";
 export const SUPABASE_URL =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_SUPABASE_URL) ||
   (typeof process !== "undefined" &&
-    (process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL)) ||
-  "https://mlhqpppvglhoivzrcyhz.supabase.co";
+    (process.env.VITE_SUPABASE_URL ||
+      process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      process.env.NEXT_PUBLIC_EduAI_SUPABASE_URL)) ||
+  "https://nyoemrzlqjtkyxozxjch.supabase.co";
 
 export const SUPABASE_KEY =
   (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) ||
   (typeof process !== "undefined" &&
-    (process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)) ||
-  "sb_publishable_WeqcBfP4EoyxIgTF9OIjSg_5lJ6mf13";
+    (process.env.VITE_SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_EduAI_SUPABASE_PUBLISHABLE_KEY ||
+      process.env.NEXT_PUBLIC_EduAI_SUPABASE_ANON_KEY)) ||
+  "sb_publishable_FiESbC5VgcMjvX-FagT0IQ_9SCm61JL";
 
 // Khởi tạo Supabase client chính thức
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
