@@ -15,7 +15,7 @@ const supabaseKey =
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
       process.env.NEXT_PUBLIC_EduAI_SUPABASE_PUBLISHABLE_KEY ||
       process.env.NEXT_PUBLIC_EduAI_SUPABASE_ANON_KEY)) ||
-  "sb_publishable_FiESbC5VgcMjvX-FagT0IQ_9SCm61JL";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55b2VtcnpscWp0a3l4b3p4amNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxMTY1MDUsImV4cCI6MjEwNzY5MjUwNX0.tt-0KIkkdGNYyUCV0LpweAv0XqvlxarTLI9ynaWoKIU";
 
 export const createClient = () =>
   createBrowserClient(supabaseUrl, supabaseKey);

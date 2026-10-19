@@ -79,6 +79,7 @@ import {
   checkSupabaseHealth,
   SupabaseHealthStatus,
   requestPeerSync,
+  startContinuousSync,
   fetchInitialSupabaseAssignments,
   fetchInitialSupabaseSubmissions,
   fetchInitialSupabaseClasses,
@@ -134,6 +135,7 @@ export default function App() {
   const [showHistorySyncModal, setShowHistorySyncModal] = useState<boolean>(false);
   const [isManualSyncing, setIsManualSyncing] = useState<boolean>(false);
   const [syncModalNotice, setSyncModalNotice] = useState<string>("");
+  const [realtimeToast, setRealtimeToast] = useState<string | null>(null);
 
   // Quản lý Trạng thái & Hộp thoại Đồng bộ Google Drive (0đ chi phí)
   const [showGoogleDriveModal, setShowGoogleDriveModal] = useState<boolean>(false);
@@ -148,7 +150,7 @@ export default function App() {
     checkSupabaseHealth().then(setSupabaseHealth).catch(() => {});
     const interval = setInterval(() => {
       checkSupabaseHealth().then(setSupabaseHealth).catch(() => {});
-    }, 10000);
+    }, 8000);
     return () => clearInterval(interval);
   }, []);
 
@@ -231,7 +233,8 @@ export default function App() {
 
   // Lắng nghe cơ sở dữ liệu Supabase Realtime & Database (Zero Quota Limit)
   useEffect(() => {
-    seedInitialSupabaseDataIfEmpty(INITIAL_CLASSES, INITIAL_ASSIGNMENTS, INITIAL_SUBMISSIONS).catch(() => {});
+    seedInitialSupabaseDataIfEmpty(INITIAL_CLASSES).catch(() => {});
+    const stopContinuous = startContinuousSync();
 
     // Lắng nghe Đề thi thời gian thực từ Supabase Realtime
     const unsubAssignments = subscribeAssignments((remoteAssignments) => {
@@ -241,17 +244,21 @@ export default function App() {
           saveCachedLocalState({ assignments: next });
           return next;
         });
-      } else if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
+      } else if (Array.isArray(remoteAssignments)) {
         setAssignments((prev) => {
           let next: Assignment[];
           if (remoteAssignments.length === 1 && prev.length > 0) {
             const incoming = remoteAssignments[0];
             const exists = prev.some((a) => a.id === incoming.id);
+            if (!exists) {
+              setRealtimeToast(`📝 Đề thi mới: "${incoming.title}" (${incoming.className}) vừa được đồng bộ từ máy Thầy!`);
+              setTimeout(() => setRealtimeToast(null), 6000);
+            }
             next = exists
               ? prev.map((a) => (a.id === incoming.id ? incoming : a))
               : [incoming, ...prev];
           } else {
-            next = mergeArrayById(remoteAssignments, prev, []);
+            next = remoteAssignments;
           }
           saveCachedLocalState({ assignments: next });
           return next;
@@ -277,7 +284,7 @@ export default function App() {
               ? prev.map((c) => (c.id === incoming.id ? incoming : c))
               : [incoming, ...prev];
           } else {
-            next = mergeArrayById(remoteClasses, prev, []);
+            next = remoteClasses;
           }
           saveCachedLocalState({ classes: next });
           return next;
@@ -299,11 +306,15 @@ export default function App() {
           if (remoteSubmissions.length === 1 && prev.length > 0) {
             const incoming = remoteSubmissions[0];
             const exists = prev.some((s) => s.id === incoming.id);
+            if (!exists) {
+              setRealtimeToast(`🎉 Học sinh ${incoming.studentName} (${incoming.className}) vừa nộp bài "${incoming.assignmentTitle}" (${Number(incoming.finalScore || 0).toFixed(1)}đ)!`);
+              setTimeout(() => setRealtimeToast(null), 7000);
+            }
             next = exists
               ? prev.map((s) => (s.id === incoming.id ? incoming : s))
               : [incoming, ...prev];
           } else {
-            next = mergeArrayById(remoteSubmissions, prev, []);
+            next = remoteSubmissions;
           }
           saveCachedLocalState({ submissions: next });
           return next;
@@ -313,26 +324,17 @@ export default function App() {
 
     // Lắng nghe Trạng thái hệ thống thời gian thực toàn diện từ Supabase
     const unsubSystemState = subscribeSystemState((remoteState) => {
-      if (Array.isArray(remoteState?.assignments) && remoteState.assignments.length > 0) {
-        setAssignments((prev) => {
-          const next = mergeArrayById(remoteState.assignments!, prev, []);
-          saveCachedLocalState({ assignments: next });
-          return next;
-        });
+      if (Array.isArray(remoteState?.assignments)) {
+        setAssignments(remoteState.assignments);
+        saveCachedLocalState({ assignments: remoteState.assignments });
       }
       if (Array.isArray(remoteState?.classes) && remoteState.classes.length > 0) {
-        setClassesList((prev) => {
-          const next = mergeArrayById(remoteState.classes!, prev, []);
-          saveCachedLocalState({ classes: next });
-          return next;
-        });
+        setClassesList(remoteState.classes);
+        saveCachedLocalState({ classes: remoteState.classes });
       }
       if (Array.isArray(remoteState?.submissions)) {
-        setSubmissions((prev) => {
-          const next = mergeArrayById(remoteState.submissions!, prev, []);
-          saveCachedLocalState({ submissions: next });
-          return next;
-        });
+        setSubmissions(remoteState.submissions);
+        saveCachedLocalState({ submissions: remoteState.submissions });
       }
       if (remoteState?.operationHistory && Array.isArray(remoteState.operationHistory)) {
         setOperationHistory((prev) => mergeArrayById(remoteState.operationHistory!, prev, []));
@@ -368,6 +370,7 @@ export default function App() {
     });
 
     return () => {
+      stopContinuous();
       unsubAssignments();
       unsubClasses();
       unsubSubmissions();
@@ -393,22 +396,28 @@ export default function App() {
         fetchInitialSupabaseState(),
       ]);
 
-      if (Array.isArray(asgs) && asgs.length > 0) {
-        setAssignments((prev) => mergeArrayById(asgs, prev, []));
-      } else if (st?.assignments && st.assignments.length > 0) {
-        setAssignments((prev) => mergeArrayById(st.assignments, prev, []));
+      if (Array.isArray(asgs)) {
+        setAssignments(asgs);
+        saveCachedLocalState({ assignments: asgs });
+      } else if (st?.assignments) {
+        setAssignments(st.assignments);
+        saveCachedLocalState({ assignments: st.assignments });
       }
 
-      if (Array.isArray(subs) && subs.length > 0) {
-        setSubmissions((prev) => mergeArrayById(subs, prev, []));
-      } else if (st?.submissions && st.submissions.length > 0) {
-        setSubmissions((prev) => mergeArrayById(st.submissions, prev, []));
+      if (Array.isArray(subs)) {
+        setSubmissions(subs);
+        saveCachedLocalState({ submissions: subs });
+      } else if (st?.submissions) {
+        setSubmissions(st.submissions);
+        saveCachedLocalState({ submissions: st.submissions });
       }
 
       if (Array.isArray(cls) && cls.length > 0) {
-        setClassesList((prev) => mergeArrayById(cls, prev, []));
+        setClassesList(cls);
+        saveCachedLocalState({ classes: cls });
       } else if (st?.classes && st.classes.length > 0) {
-        setClassesList((prev) => mergeArrayById(st.classes, prev, []));
+        setClassesList(st.classes);
+        saveCachedLocalState({ classes: st.classes });
       }
 
       if (!silent) {
@@ -958,6 +967,26 @@ export default function App() {
             <>
               <button
                 type="button"
+                onClick={() => handleRefreshSupabaseData(false)}
+                disabled={isRefreshingCloud}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
+                title="Bấm để đồng bộ dữ liệu tức thì từ Supabase Cloud PostgreSQL"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isRefreshingCloud ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">
+                  {isRefreshingCloud ? "Đang đồng bộ..." : "Đồng bộ đa máy"}
+                </span>
+                <span className="text-[10px] bg-emerald-200/70 text-emerald-900 px-1.5 py-0.2 rounded-full font-bold">
+                  {assignments.length} đề • {submissions.length} bài
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowSupabaseModal(true)}
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-xs"
                 title="Trạng thái kết nối Supabase Realtime & Cơ sở dữ liệu đám mây đa thiết bị"
@@ -1023,6 +1052,25 @@ export default function App() {
             </>
           ) : (
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleRefreshSupabaseData(false)}
+                disabled={isRefreshingCloud}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors whitespace-nowrap cursor-pointer shadow-2xs"
+                title="Bấm để quét và đồng bộ đề bài mới nhất từ máy Thầy"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isRefreshingCloud ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">
+                  {isRefreshingCloud ? "Đang đồng bộ..." : "Đồng bộ với máy Thầy"}
+                </span>
+                <span className="text-[10px] bg-emerald-200/70 text-emerald-900 px-1.5 py-0.2 rounded-full font-bold">
+                  {assignments.length} đề
+                </span>
+              </button>
               {!showTeacherUnlockPrompt ? (
                 <button
                   type="button"
@@ -1081,6 +1129,21 @@ export default function App() {
           )}
         </div>
       </header>
+
+      {/* Floating Realtime Cross-Device Toast */}
+      {realtimeToast && (
+        <div className="fixed top-20 right-6 z-50 max-w-md p-4 bg-gradient-to-r from-emerald-600 to-teal-700 text-white rounded-2xl shadow-2xl flex items-center gap-3 animate-bounce border border-emerald-400">
+          <span className="text-xl">⚡</span>
+          <span className="text-xs font-bold leading-relaxed">{realtimeToast}</span>
+          <button
+            type="button"
+            onClick={() => setRealtimeToast(null)}
+            className="text-white/80 hover:text-white font-bold ml-auto px-2 py-1 rounded bg-black/20 hover:bg-black/30 cursor-pointer text-xs"
+          >
+            Đóng ✕
+          </button>
+        </div>
+      )}
 
       {/* Mobile Navigation Bar — Only visible in Teacher Mode */}
       {activeTab !== "student_portal" && (

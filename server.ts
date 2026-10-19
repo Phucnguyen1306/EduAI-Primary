@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { GoogleGenAI, Type } from "@google/genai";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import {
   INITIAL_CLASSES,
   INITIAL_ASSIGNMENTS,
@@ -17,6 +18,18 @@ import {
 } from "./src/data/initialData.ts";
 
 dotenv.config();
+
+const SUPABASE_SERVER_URL =
+  process.env.VITE_SUPABASE_URL ||
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  "https://nyoemrzlqjtkyxozxjch.supabase.co";
+
+const SUPABASE_SERVER_KEY =
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_EduAI_SUPABASE_ANON_KEY ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im55b2VtcnpscWp0a3l4b3p4amNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxMTY1MDUsImV4cCI6MjEwNzY5MjUwNX0.tt-0KIkkdGNYyUCV0LpweAv0XqvlxarTLI9ynaWoKIU";
+
+const serverSupabase = createSupabaseClient(SUPABASE_SERVER_URL, SUPABASE_SERVER_KEY);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -230,6 +243,148 @@ function restoreFromPersistentBackupOnBoot() {
 
 restoreFromPersistentBackupOnBoot();
 
+/**
+ * Tự động đồng bộ 2 chiều dữ liệu giữa Server Node.js và Supabase Cloud PostgreSQL
+ * Giúp mọi máy tính (giáo viên, học sinh) truy cập API đều có ngay dữ liệu mới nhất
+ */
+async function syncSupabaseStateIntoServer(): Promise<void> {
+  try {
+    const [asgRes, subRes, clsRes, stateRes] = await Promise.all([
+      serverSupabase.from("assignments").select("*").order("created_at", { ascending: false }),
+      serverSupabase.from("submissions").select("*").order("submitted_at", { ascending: false }),
+      serverSupabase.from("classes").select("*").order("name", { ascending: true }),
+      serverSupabase.from("eduai_system_state").select("payload").eq("id", "primary").maybeSingle(),
+    ]);
+
+    let stateModified = false;
+
+    // 1. Đồng bộ đề bài (assignments)
+    if (!asgRes.error && Array.isArray(asgRes.data) && asgRes.data.length > 0) {
+      const parsedAsgs = asgRes.data.map((row: any) => {
+        if (row.payload && typeof row.payload === "object" && row.payload.title) {
+          return {
+            ...row.payload,
+            id: row.id || row.payload.id,
+            title: row.title || row.payload.title,
+            grade: row.grade || row.payload.grade,
+            className: row.class_name || row.payload.className || "",
+            targetClassNames:
+              Array.isArray(row.target_class_names) && row.target_class_names.length > 0
+                ? row.target_class_names
+                : Array.isArray(row.payload.targetClassNames)
+                ? row.payload.targetClassNames
+                : [],
+          };
+        }
+        return {
+          id: row.id,
+          code: row.code || "",
+          title: row.title,
+          grade: row.grade,
+          className: row.class_name || "",
+          targetClassNames: row.target_class_names || [],
+          fileType: row.file_type || "docx",
+          studentPrompt: row.student_prompt || "",
+          standardFileNamePattern: row.standard_file_name_pattern || "",
+          checklist: row.checklist || [],
+          theoryExam: row.theory_exam || undefined,
+          isSemesterExam: !!row.is_semester_exam,
+        };
+      });
+
+      const stateAssignments = (stateRes.data as any)?.payload?.assignments;
+      if (parsedAsgs.length > 0 || (asgRes.data.length === 0 && liveSystemState.assignments.length > 0 && !stateAssignments?.length)) {
+        if (JSON.stringify(parsedAsgs) !== JSON.stringify(liveSystemState.assignments)) {
+          liveSystemState.assignments = parsedAsgs;
+          stateModified = true;
+        }
+      }
+    } else if ((stateRes.data as any)?.payload?.assignments?.length > 0) {
+      const stateAsgs = (stateRes.data as any).payload.assignments;
+      if (JSON.stringify(stateAsgs) !== JSON.stringify(liveSystemState.assignments)) {
+        liveSystemState.assignments = stateAsgs;
+        stateModified = true;
+      }
+    }
+
+    // 2. Đồng bộ bài nộp của học sinh (submissions)
+    if (!subRes.error && Array.isArray(subRes.data)) {
+      const parsedSubs = subRes.data.map((row: any) => {
+        if (row.payload && typeof row.payload === "object" && row.payload.studentName) {
+          return {
+            ...row.payload,
+            id: row.id || row.payload.id,
+            studentName: row.student_name || row.payload.studentName,
+            className: row.class_name || row.payload.className,
+            assignmentId: row.assignment_id || row.payload.assignmentId,
+            finalScore: typeof row.final_score === "number" ? row.final_score : row.payload.finalScore,
+            approvalStatus: row.approval_status || row.payload.approvalStatus || "pending",
+            submittedAt: row.submitted_at || row.payload.submittedAt || new Date().toISOString(),
+          };
+        }
+        return {
+          id: row.id,
+          studentId: row.student_id || "",
+          studentName: row.student_name,
+          className: row.class_name,
+          grade: row.grade || "Lớp 4",
+          assignmentId: row.assignment_id,
+          assignmentTitle: row.assignment_title || "",
+          fileType: row.file_type || "docx",
+          originalFileName: row.original_file_name || "",
+          standardizedFileName: row.standardized_file_name || "",
+          submittedAt: row.submitted_at || new Date().toISOString(),
+          aiScore: Number(row.ai_score || 0),
+          finalScore: Number(row.final_score || 0),
+          approvalStatus: row.approval_status || "pending",
+          needsAttention: !!row.needs_attention,
+          detectedErrors: row.detected_errors || [],
+          criterionBreakdown: row.criterion_breakdown || [],
+          personalizedFeedback: row.personalized_feedback || "",
+        };
+      });
+
+      const stateSubs = (stateRes.data as any)?.payload?.submissions;
+      if (parsedSubs.length > 0 || (subRes.data.length === 0 && liveSystemState.submissions.length > 0 && !stateSubs?.length)) {
+        if (JSON.stringify(parsedSubs) !== JSON.stringify(liveSystemState.submissions)) {
+          liveSystemState.submissions = parsedSubs;
+          stateModified = true;
+        }
+      }
+    } else if ((stateRes.data as any)?.payload?.submissions?.length > 0) {
+      const stateSubsList = (stateRes.data as any).payload.submissions;
+      if (JSON.stringify(stateSubsList) !== JSON.stringify(liveSystemState.submissions)) {
+        liveSystemState.submissions = stateSubsList;
+        stateModified = true;
+      }
+    }
+
+    // 3. Đồng bộ danh sách lớp học nếu bảng trên server chưa đủ
+    if (!clsRes.error && Array.isArray(clsRes.data) && clsRes.data.length > 0) {
+      if (liveSystemState.classes.length === 0 || liveSystemState.classes.length < clsRes.data.length) {
+        const parsedClasses = clsRes.data.map((c: any) => c.payload || c);
+        liveSystemState.classes = parsedClasses;
+        stateModified = true;
+      }
+    }
+
+    if (stateModified) {
+      liveSystemState.lastUpdatedAt = new Date().toLocaleString("vi-VN");
+      liveSystemState.lastUpdatedEpoch = Date.now();
+      writeStateToInitialDataTs();
+      console.log(`[Server Supabase Sync] Đã đồng bộ ${liveSystemState.assignments.length} đề thi & ${liveSystemState.submissions.length} bài nộp từ Supabase Cloud!`);
+    }
+  } catch (err) {
+    console.warn("[Server Supabase Sync] Cảnh báo đồng bộ:", err);
+  }
+}
+
+// Chạy đồng bộ Supabase ngay khi server khởi động và lặp lại định kỳ mỗi 15 giây
+syncSupabaseStateIntoServer().catch(() => {});
+setInterval(() => {
+  syncSupabaseStateIntoServer().catch(() => {});
+}, 15000);
+
 async function startServer() {
   const app = express();
   const portArgIndex = process.argv.indexOf("--port");
@@ -239,7 +394,11 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
 
   // 0. API đọc và tự động cập nhật trạng thái thao tác của người dùng trực tiếp vào code (src/data/initialData.ts)
-  app.get("/api/system/code-state", (_req, res) => {
+  app.get("/api/system/code-state", async (_req, res) => {
+    // Nếu trên server chưa có đề thi nào, thử kéo nhanh từ Supabase trước khi phản hồi
+    if (liveSystemState.assignments.length === 0) {
+      await syncSupabaseStateIntoServer().catch(() => {});
+    }
     res.json({
       ok: true,
       ...liveSystemState,
@@ -351,6 +510,52 @@ async function startServer() {
       syncSystemStateFilesToGoogleDrive(liveSystemState).catch((err) => {
         console.warn("Auto sync to Google Drive mirror warning:", err?.message || err);
       });
+
+      // Tự động sao lưu và đồng bộ lên Supabase Cloud PostgreSQL
+      if (Array.isArray(assignments) && assignments.length > 0) {
+        const asgRows = assignments.map((asg: any) => ({
+          id: asg.id,
+          code: asg.code || "",
+          title: asg.title,
+          grade: asg.grade,
+          class_name: asg.className || "",
+          target_class_names: asg.targetClassNames || [],
+          file_type: asg.fileType || "docx",
+          student_prompt: asg.studentPrompt || "",
+          standard_file_name_pattern: asg.standardFileNamePattern || "",
+          checklist: asg.checklist || [],
+          theory_exam: asg.theoryExam || null,
+          is_semester_exam: !!asg.isSemesterExam,
+          payload: asg,
+          updated_at: new Date().toISOString(),
+        }));
+        Promise.resolve(serverSupabase.from("assignments").upsert(asgRows)).catch(() => {});
+      }
+      if (Array.isArray(submissions) && submissions.length > 0) {
+        const subRows = submissions.map((sub: any) => ({
+          id: sub.id,
+          student_id: sub.studentId || "",
+          student_name: sub.studentName,
+          class_name: sub.className,
+          grade: sub.grade || "Lớp 4",
+          assignment_id: sub.assignmentId,
+          assignment_title: sub.assignmentTitle || "",
+          file_type: sub.fileType || "docx",
+          original_file_name: sub.originalFileName || "",
+          standardized_file_name: sub.standardizedFileName || "",
+          submitted_at: sub.submittedAt || new Date().toISOString(),
+          ai_score: sub.aiScore || 0,
+          final_score: sub.finalScore || 0,
+          approval_status: sub.approvalStatus || "pending",
+          needs_attention: !!sub.needsAttention,
+          detected_errors: Array.isArray(sub.detectedErrors) ? sub.detectedErrors : [],
+          criterion_breakdown: sub.criterionBreakdown || [],
+          personalized_feedback: sub.personalizedFeedback || "",
+          payload: sub,
+          updated_at: new Date().toISOString(),
+        }));
+        Promise.resolve(serverSupabase.from("submissions").upsert(subRows)).catch(() => {});
+      }
 
       res.json({
         ok: true,

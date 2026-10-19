@@ -195,6 +195,46 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
     resetCurrentAttempt();
   };
 
+  // Tự động chọn đề kiểm tra khi danh sách đề của lớp thay đổi (ví dụ: Thầy vừa giao đề mới từ máy khác)
+  useEffect(() => {
+    if (classAssignments.length > 0) {
+      if (!selectedAssignmentId || !classAssignments.some((a) => a.id === selectedAssignmentId)) {
+        setSelectedAssignmentId(classAssignments[0].id);
+      }
+    } else {
+      setSelectedAssignmentId("");
+    }
+  }, [classAssignments, selectedAssignmentId]);
+
+  // Bắt sự kiện thời gian thực khi có bài mới vừa được Thầy giao từ máy khác
+  const [newAssignmentAlert, setNewAssignmentAlert] = useState<string | null>(null);
+  const prevAssignmentsCountRef = useRef<number>(-1);
+  const lastKnownFirstAsgIdRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!currentClass) return;
+    const currentCount = classAssignments.length;
+    const firstAsgId = classAssignments[0]?.id || "";
+
+    if (prevAssignmentsCountRef.current !== -1) {
+      if (
+        currentCount > prevAssignmentsCountRef.current ||
+        (firstAsgId && firstAsgId !== lastKnownFirstAsgIdRef.current)
+      ) {
+        const latest = classAssignments[0];
+        if (latest) {
+          setNewAssignmentAlert(
+            `🔔 Thầy vừa giao đề mới: "${latest.title}"! Đã tự động cập nhật vào danh sách bài làm của ${currentClass.name}.`
+          );
+          setSelectedAssignmentId(latest.id);
+          setTimeout(() => setNewAssignmentAlert(null), 8000);
+        }
+      }
+    }
+    prevAssignmentsCountRef.current = currentCount;
+    lastKnownFirstAsgIdRef.current = firstAsgId;
+  }, [classAssignments, currentClass]);
+
   // Khi học sinh vừa chọn tải tệp lên từ máy tính -> Hệ thống tự động lưu ngay vào Google Drive đã chia sẻ
   // theo từng mục bài tập được giao mà KHÔNG yêu cầu học sinh đăng nhập Google
   const handleFileChosenFromSystem = async (file: File) => {
@@ -1196,6 +1236,23 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       ) : (
         /* TAB 1 DÀNH CHO HỌC SINH: LÀM BÀI & NỘP BÀI (Hiển thị ngay khi đã chọn Lớp học) */
         <>
+          {/* Thông báo Realtime bài mới vừa giao từ máy Thầy */}
+          {newAssignmentAlert && (
+            <div className="p-4 bg-emerald-50 border-2 border-emerald-300 text-emerald-900 rounded-2xl flex items-center justify-between gap-3 shadow-sm animate-pulse">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">🔔</span>
+                <span className="font-bold text-xs sm:text-sm">{newAssignmentAlert}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNewAssignmentAlert(null)}
+                className="text-xs text-emerald-700 hover:text-emerald-900 font-bold px-2 py-1 rounded-lg bg-emerald-100 hover:bg-emerald-200 cursor-pointer"
+              >
+                Đóng ✕
+              </button>
+            </div>
+          )}
+
           {/* Step 3: Assignment Picker for this Class Grade */}
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">

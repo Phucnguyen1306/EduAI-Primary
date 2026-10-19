@@ -124,6 +124,7 @@ export interface Assignment {
     scratchBlocksRequired?: string[];
     slideCountRequired?: number;
   };
+  updated_at?: string;
 }
 
 export interface ScratchSimulationStep {
@@ -281,5 +282,6 @@ export interface StudentSubmission {
   driveSynced?: boolean;
   practiceWorkImageDataUrl?: string;
   practiceOriginalFileName?: string;
+  updated_at?: string;
 }
 
