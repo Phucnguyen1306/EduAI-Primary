@@ -1088,11 +1088,11 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
     Array.isArray(savedDraft?.selectedClassNames) && savedDraft.selectedClassNames.length > 0
       ? savedDraft.selectedClassNames
       : initialGradeClassNames.length > 0
-      ? [initialGradeClassNames[0]]
+      ? initialGradeClassNames
       : ["Lớp 4/1"]
   );
   const [className, setClassName] = useState<string>(
-    savedDraft?.className || initialGradeClassNames[0] || "Lớp 4/1"
+    savedDraft?.className || formatTargetClassesLabel(initialGradeClassNames, initialGrade) || "Lớp 4/1"
   );
 
   // Bước 3: Chọn 1 hoặc nhiều Chủ đề SGK Tin học KNTT đúng theo Khối lớp Bước 1
@@ -1446,15 +1446,19 @@ export const AiExamBuilderView: React.FC<AiExamBuilderViewProps> = ({
   const handleGradeChange = (newGrade: GradeLevel) => {
     setGrade(newGrade);
     const matchingClsList = classes.filter((c) => c.grade === newGrade);
-    const defaultClsName =
-      matchingClsList[0]?.name ||
-      (newGrade === "Lớp 3"
-        ? "Lớp 3/1"
-        : newGrade === "Lớp 4"
-        ? "Lớp 4/1"
-        : "Lớp 5/1");
-    setSelectedClassNames([defaultClsName]);
-    setClassName(defaultClsName);
+    const allMatchingNames = matchingClsList.map((c) => c.name);
+    const defaultSelected =
+      allMatchingNames.length > 0
+        ? allMatchingNames
+        : [
+            newGrade === "Lớp 3"
+              ? "Lớp 3/1"
+              : newGrade === "Lớp 4"
+              ? "Lớp 4/1"
+              : "Lớp 5/1",
+          ];
+    setSelectedClassNames(defaultSelected);
+    setClassName(formatTargetClassesLabel(defaultSelected, newGrade));
 
     const topicsOfGrade = KNTT_CURRICULUM[newGrade];
     const selectedIndices = selectedTopicIds

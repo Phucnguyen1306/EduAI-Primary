@@ -520,7 +520,7 @@ export async function fetchLatestSupabaseUpdates(): Promise<{
   try {
     // 1. Kiểm tra cập nhật Đề thi (assignments)
     const asgs = await fetchInitialSupabaseAssignments();
-    if (asgs !== null && Array.isArray(asgs)) {
+    if (asgs !== null && Array.isArray(asgs) && asgs.length > 0) {
       asgCount = asgs.length;
       const hash =
         asgs
@@ -538,9 +538,9 @@ export async function fetchLatestSupabaseUpdates(): Promise<{
         updateStoredLocalSnapshot({ assignments: asgs });
       }
     } else {
-      // Fallback: nếu bảng assignments chưa sẵn sàng, kiểm tra eduai_system_state
+      // Fallback: nếu bảng assignments chưa sẵn sàng hoặc rỗng, kiểm tra eduai_system_state
       const st = await fetchInitialSupabaseState();
-      if (st?.assignments && Array.isArray(st.assignments)) {
+      if (st?.assignments && Array.isArray(st.assignments) && st.assignments.length > 0) {
         asgCount = st.assignments.length;
         const hash =
           "state_" +
@@ -809,21 +809,16 @@ export function subscribeSupabaseAssignments(
 
   // Tải dữ liệu ban đầu từ bảng 'assignments', nếu không có thì đọc từ 'eduai_system_state'
   fetchInitialSupabaseAssignments().then((asgs) => {
-    if (asgs !== null) {
-      if (asgs.length > 0) {
-        onUpdate(asgs);
-        updateStoredLocalSnapshot({ assignments: asgs });
-      } else {
-        fetchInitialSupabaseState().then((state) => {
-          if (state?.assignments && state.assignments.length > 0) {
-            onUpdate(state.assignments);
-            updateStoredLocalSnapshot({ assignments: state.assignments });
-          } else {
-            onUpdate([]);
-            updateStoredLocalSnapshot({ assignments: [] });
-          }
-        });
-      }
+    if (asgs !== null && asgs.length > 0) {
+      onUpdate(asgs);
+      updateStoredLocalSnapshot({ assignments: asgs });
+    } else {
+      fetchInitialSupabaseState().then((state) => {
+        if (state?.assignments && state.assignments.length > 0) {
+          onUpdate(state.assignments);
+          updateStoredLocalSnapshot({ assignments: state.assignments });
+        }
+      });
     }
   });
 
@@ -955,7 +950,21 @@ export async function saveAssignmentToSupabase(assignment: Assignment): Promise<
       updated_at: nowIso,
     });
     if (asgErr) {
-      console.warn("Lỗi lưu bảng assignments:", asgErr.message || asgErr);
+      console.warn("Lỗi lưu bảng assignments chi tiết, đang thử lưu bảng rút gọn:", asgErr.message || asgErr);
+      const { error: fallbackErr } = await supabase.from("assignments").upsert({
+        id: assignment.id,
+        code: assignment.code || "",
+        title: assignment.title,
+        grade: assignment.grade,
+        class_name: assignment.className || "",
+        target_class_names: assignment.targetClassNames || [],
+        file_type: assignment.fileType || "docx",
+        payload: assignment,
+        updated_at: nowIso,
+      });
+      if (fallbackErr) {
+        console.warn("Lỗi lưu assignments fallback:", fallbackErr.message || fallbackErr);
+      }
     }
   } catch (err) {
     console.warn("Lỗi lưu bảng assignments:", err);

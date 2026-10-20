@@ -244,22 +244,15 @@ export default function App() {
           saveCachedLocalState({ assignments: next });
           return next;
         });
-      } else if (Array.isArray(remoteAssignments)) {
+      } else if (Array.isArray(remoteAssignments) && remoteAssignments.length > 0) {
         setAssignments((prev) => {
-          let next: Assignment[];
-          if (remoteAssignments.length === 1 && prev.length > 0) {
-            const incoming = remoteAssignments[0];
-            const exists = prev.some((a) => a.id === incoming.id);
-            if (!exists) {
+          const next = mergeArrayById(remoteAssignments, prev, []);
+          remoteAssignments.forEach((incoming) => {
+            if (!prev.some((a) => a.id === incoming.id)) {
               setRealtimeToast(`📝 Đề thi mới: "${incoming.title}" (${incoming.className}) vừa được đồng bộ từ máy Thầy!`);
               setTimeout(() => setRealtimeToast(null), 6000);
             }
-            next = exists
-              ? prev.map((a) => (a.id === incoming.id ? incoming : a))
-              : [incoming, ...prev];
-          } else {
-            next = remoteAssignments;
-          }
+          });
           saveCachedLocalState({ assignments: next });
           return next;
         });
@@ -276,16 +269,7 @@ export default function App() {
         });
       } else if (Array.isArray(remoteClasses) && remoteClasses.length > 0) {
         setClassesList((prev) => {
-          let next: ClassRoom[];
-          if (remoteClasses.length === 1 && prev.length > 0) {
-            const incoming = remoteClasses[0];
-            const exists = prev.some((c) => c.id === incoming.id);
-            next = exists
-              ? prev.map((c) => (c.id === incoming.id ? incoming : c))
-              : [incoming, ...prev];
-          } else {
-            next = remoteClasses;
-          }
+          const next = mergeArrayById(remoteClasses, prev, []);
           saveCachedLocalState({ classes: next });
           return next;
         });
@@ -300,22 +284,15 @@ export default function App() {
           saveCachedLocalState({ submissions: next });
           return next;
         });
-      } else if (Array.isArray(remoteSubmissions)) {
+      } else if (Array.isArray(remoteSubmissions) && remoteSubmissions.length > 0) {
         setSubmissions((prev) => {
-          let next: StudentSubmission[];
-          if (remoteSubmissions.length === 1 && prev.length > 0) {
-            const incoming = remoteSubmissions[0];
-            const exists = prev.some((s) => s.id === incoming.id);
-            if (!exists) {
+          const next = mergeArrayById(remoteSubmissions, prev, []);
+          remoteSubmissions.forEach((incoming) => {
+            if (!prev.some((s) => s.id === incoming.id)) {
               setRealtimeToast(`🎉 Học sinh ${incoming.studentName} (${incoming.className}) vừa nộp bài "${incoming.assignmentTitle}" (${Number(incoming.finalScore || 0).toFixed(1)}đ)!`);
               setTimeout(() => setRealtimeToast(null), 7000);
             }
-            next = exists
-              ? prev.map((s) => (s.id === incoming.id ? incoming : s))
-              : [incoming, ...prev];
-          } else {
-            next = remoteSubmissions;
-          }
+          });
           saveCachedLocalState({ submissions: next });
           return next;
         });

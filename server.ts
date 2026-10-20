@@ -293,16 +293,36 @@ async function syncSupabaseStateIntoServer(): Promise<void> {
       });
 
       const stateAssignments = (stateRes.data as any)?.payload?.assignments;
-      if (parsedAsgs.length > 0 || (asgRes.data.length === 0 && liveSystemState.assignments.length > 0 && !stateAssignments?.length)) {
-        if (JSON.stringify(parsedAsgs) !== JSON.stringify(liveSystemState.assignments)) {
-          liveSystemState.assignments = parsedAsgs;
+      if (parsedAsgs.length > 0) {
+        const mergedAsgs = mergeArrayById(
+          parsedAsgs,
+          liveSystemState.assignments,
+          liveSystemState.deletedIds?.assignments || []
+        );
+        if (JSON.stringify(mergedAsgs) !== JSON.stringify(liveSystemState.assignments)) {
+          liveSystemState.assignments = mergedAsgs;
+          stateModified = true;
+        }
+      } else if (Array.isArray(stateAssignments) && stateAssignments.length > 0) {
+        const mergedAsgs = mergeArrayById(
+          stateAssignments,
+          liveSystemState.assignments,
+          liveSystemState.deletedIds?.assignments || []
+        );
+        if (JSON.stringify(mergedAsgs) !== JSON.stringify(liveSystemState.assignments)) {
+          liveSystemState.assignments = mergedAsgs;
           stateModified = true;
         }
       }
-    } else if ((stateRes.data as any)?.payload?.assignments?.length > 0) {
+    } else if (Array.isArray((stateRes.data as any)?.payload?.assignments) && (stateRes.data as any).payload.assignments.length > 0) {
       const stateAsgs = (stateRes.data as any).payload.assignments;
-      if (JSON.stringify(stateAsgs) !== JSON.stringify(liveSystemState.assignments)) {
-        liveSystemState.assignments = stateAsgs;
+      const mergedAsgs = mergeArrayById(
+        stateAsgs,
+        liveSystemState.assignments,
+        liveSystemState.deletedIds?.assignments || []
+      );
+      if (JSON.stringify(mergedAsgs) !== JSON.stringify(liveSystemState.assignments)) {
+        liveSystemState.assignments = mergedAsgs;
         stateModified = true;
       }
     }
@@ -345,16 +365,36 @@ async function syncSupabaseStateIntoServer(): Promise<void> {
       });
 
       const stateSubs = (stateRes.data as any)?.payload?.submissions;
-      if (parsedSubs.length > 0 || (subRes.data.length === 0 && liveSystemState.submissions.length > 0 && !stateSubs?.length)) {
-        if (JSON.stringify(parsedSubs) !== JSON.stringify(liveSystemState.submissions)) {
-          liveSystemState.submissions = parsedSubs;
+      if (parsedSubs.length > 0) {
+        const mergedSubs = mergeArrayById(
+          parsedSubs,
+          liveSystemState.submissions,
+          liveSystemState.deletedIds?.submissions || []
+        );
+        if (JSON.stringify(mergedSubs) !== JSON.stringify(liveSystemState.submissions)) {
+          liveSystemState.submissions = mergedSubs;
+          stateModified = true;
+        }
+      } else if (Array.isArray(stateSubs) && stateSubs.length > 0) {
+        const mergedSubs = mergeArrayById(
+          stateSubs,
+          liveSystemState.submissions,
+          liveSystemState.deletedIds?.submissions || []
+        );
+        if (JSON.stringify(mergedSubs) !== JSON.stringify(liveSystemState.submissions)) {
+          liveSystemState.submissions = mergedSubs;
           stateModified = true;
         }
       }
-    } else if ((stateRes.data as any)?.payload?.submissions?.length > 0) {
+    } else if (Array.isArray((stateRes.data as any)?.payload?.submissions) && (stateRes.data as any).payload.submissions.length > 0) {
       const stateSubsList = (stateRes.data as any).payload.submissions;
-      if (JSON.stringify(stateSubsList) !== JSON.stringify(liveSystemState.submissions)) {
-        liveSystemState.submissions = stateSubsList;
+      const mergedSubs = mergeArrayById(
+        stateSubsList,
+        liveSystemState.submissions,
+        liveSystemState.deletedIds?.submissions || []
+      );
+      if (JSON.stringify(mergedSubs) !== JSON.stringify(liveSystemState.submissions)) {
+        liveSystemState.submissions = mergedSubs;
         stateModified = true;
       }
     }
@@ -530,6 +570,17 @@ async function startServer() {
           updated_at: new Date().toISOString(),
         }));
         Promise.resolve(serverSupabase.from("assignments").upsert(asgRows)).catch(() => {});
+        Promise.resolve(
+          serverSupabase.from("eduai_system_state").upsert({
+            id: "primary",
+            payload: {
+              ...liveSystemState,
+              assignments: liveSystemState.assignments,
+              lastUpdatedAt: liveSystemState.lastUpdatedAt,
+            },
+            updated_at: new Date().toISOString(),
+          })
+        ).catch(() => {});
       }
       if (Array.isArray(submissions) && submissions.length > 0) {
         const subRows = submissions.map((sub: any) => ({

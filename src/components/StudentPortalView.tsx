@@ -111,15 +111,27 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
     currentClass?.students.find((s) => s.id === selectedStudentId) || null;
 
   // Filter assignments matching current class (supports single class, multi-class in same grade, or whole grade)
-  const classAssignments = currentClass
-    ? assignments.filter((a) =>
-        isAssignmentForClass(a, currentClass.name, currentClass.grade)
-      )
-    : [];
+  const classAssignments = useMemo(() => {
+    if (!currentClass) return [];
+    const directMatches = assignments.filter((a) =>
+      isAssignmentForClass(a, currentClass.name, currentClass.grade)
+    );
+    if (directMatches.length > 0) return directMatches;
+    // Fallback: nếu chưa giao riêng lớp này, nhưng có đề cùng khối lớp trong trường
+    const gradeMatches = assignments.filter((a) => {
+      const aGradeNum = String(a.grade || "").match(/\d+/)?.[0];
+      const cGradeNum = String(currentClass.grade || "").match(/\d+/)?.[0];
+      return aGradeNum && cGradeNum && aGradeNum === cGradeNum;
+    });
+    return gradeMatches;
+  }, [assignments, currentClass]);
+
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>("");
   const selectedAssignment =
     classAssignments.find((a) => a.id === selectedAssignmentId) ||
+    assignments.find((a) => a.id === selectedAssignmentId) ||
     classAssignments[0] ||
+    assignments[0] ||
     null;
 
   // Chỉ nhận file khi học sinh chọn trực tiếp từ hệ thống máy tính
@@ -414,10 +426,17 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
 
   const canSubmitWork =
     !hasAlreadySubmitted &&
-    (selectedAssignment?.fileType === "theory" ? isTheoryExamComplete : isPracticeReady);
+    (selectedAssignment?.fileType === "theory" ? isTheoryExamComplete : isPracticeReady) &&
+    Boolean(currentStudent);
 
   const handleSubmitWork = async () => {
-    if (!selectedAssignment || !currentStudent || !currentClass) return;
+    if (!selectedAssignment || !currentClass) return;
+    if (!currentStudent) {
+      setSubmitValidationError(
+        "Em vui lòng bấm chọn đúng tên học sinh của em ở danh sách phía trên trước khi nộp bài nhé!"
+      );
+      return;
+    }
     setSubmitValidationError(null);
 
     // BẢO VỆ CHẶT CHẼ: Đã nộp rồi thì khóa tuyệt đối, chỉ cho nộp 1 lần duy nhất
@@ -1202,13 +1221,18 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                   <div
                     key={asg.id}
                     onClick={() => {
-                      const targetClass = classes.find((c) =>
-                        isAssignmentForClass(asg, c.name, c.grade)
-                      );
+                      const targetClass =
+                        classes.find((c) => isAssignmentForClass(asg, c.name, c.grade)) ||
+                        classes.find((c) => {
+                          const aG = String(asg.grade || "").match(/\d+/)?.[0];
+                          const cG = String(c.grade || "").match(/\d+/)?.[0];
+                          return aG && cG && aG === cG;
+                        }) ||
+                        classes[0];
                       if (targetClass) {
                         handleClassChange(targetClass.id);
-                        setSelectedAssignmentId(asg.id);
                       }
+                      setSelectedAssignmentId(asg.id);
                     }}
                     className="p-3.5 bg-white border border-slate-200 hover:border-[#0284C7] rounded-xl shadow-2xs transition-all cursor-pointer space-y-2 group"
                   >
@@ -1288,22 +1312,52 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
             </div>
 
             {classAssignments.length === 0 ? (
-              <div className="p-8 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-center space-y-3">
+              <div className="p-8 bg-white border-2 border-dashed border-slate-200 rounded-2xl text-center space-y-4">
                 <p className="text-sm font-semibold text-slate-800">
                   Chưa có bài tập nào được giao riêng cho lớp {currentClass?.name} ({currentClass?.grade}).
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Tổng số bài tập trong hệ thống: <strong>{assignments.length} đề</strong>. Nếu Thầy vừa giao bài từ máy tính khác, em hãy bấm quét sóng dưới đây để cập nhật ngay nhé!
                 </p>
-                <button
-                  type="button"
-                  onClick={handleSyncFromTeacher}
-                  disabled={isSyncingFromTeacher}
-                  className="relative group inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-[#0284C7] to-indigo-600 hover:from-[#0369A1] hover:to-indigo-700 rounded-xl cursor-pointer shadow-md transition-all active:scale-95"
-                >
-                  <Radio className={`w-4 h-4 ${isSyncingFromTeacher ? "animate-spin" : "animate-pulse"}`} />
-                  <span>{isSyncingFromTeacher ? "Đang quét sóng đề mới..." : "🛰️ Quét bài mới ngay"}</span>
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSyncFromTeacher}
+                    disabled={isSyncingFromTeacher}
+                    className="relative group inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-[#0284C7] to-indigo-600 hover:from-[#0369A1] hover:to-indigo-700 rounded-xl cursor-pointer shadow-md transition-all active:scale-95"
+                  >
+                    <Radio className={`w-4 h-4 ${isSyncingFromTeacher ? "animate-spin" : "animate-pulse"}`} />
+                    <span>{isSyncingFromTeacher ? "Đang quét sóng đề mới..." : "🛰️ Quét bài mới ngay"}</span>
+                  </button>
+                </div>
+
+                {assignments.length > 0 && (
+                  <div className="pt-4 border-t border-slate-100 space-y-2">
+                    <span className="block text-xs font-bold text-slate-600">
+                      Bấm vào đề dưới đây để làm bài ngay:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 text-left">
+                      {assignments.map((asg) => (
+                        <div
+                          key={asg.id}
+                          onClick={() => setSelectedAssignmentId(asg.id)}
+                          className="p-3 bg-slate-50 hover:bg-sky-50 border border-slate-200 hover:border-[#0284C7] rounded-xl cursor-pointer transition-all"
+                        >
+                          <div className="flex items-center justify-between text-[10px] font-bold text-[#0284C7]">
+                            <span>{asg.grade}</span>
+                            <span>.{asg.fileType}</span>
+                          </div>
+                          <h5 className="text-xs font-bold text-slate-900 line-clamp-1 mt-1">
+                            {asg.title}
+                          </h5>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Giao cho: {asg.className}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1473,7 +1527,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
           )}
 
           {/* Step 4: Do Exercise or Upload File from System — BÀN ĐIỀU KHIỂN & THANH TIẾN ĐỘ NĂNG LƯỢNG */}
-          {selectedAssignment && currentStudent && currentClass && (() => {
+          {selectedAssignment && currentClass && (() => {
             const isTheory = selectedAssignment.fileType === "theory";
             const mcqs = activeTheoryMcqs;
             const essays = selectedAssignment.theoryExam?.shortAnswers || (selectedAssignment.theoryExam?.shortAnswer ? [selectedAssignment.theoryExam.shortAnswer] : []);
@@ -1543,7 +1597,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
               <div className="border-b border-slate-200 pb-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-mono font-semibold text-[#0284C7]">
-                    BÀI LÀM CỦA: {currentStudent.name.toUpperCase()} ({currentClass.name})
+                    BÀI LÀM CỦA: {currentStudent ? currentStudent.name.toUpperCase() : "CHƯA CHỌN TÊN HỌC SINH"} ({currentClass.name})
                   </span>
                   {selectedAssignment.fileType !== "theory" && (
                     <button
@@ -1556,6 +1610,27 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                     </button>
                   )}
                 </div>
+
+                {!currentStudent && (
+                  <div className="p-4 bg-sky-50 border-2 border-sky-300 rounded-2xl space-y-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-sky-900">
+                      <School className="w-4 h-4 text-[#0284C7]" />
+                      <span>Đề thi đã tải thành công! Em hãy bấm chọn đúng tên của mình để bắt đầu làm bài:</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-1.5 bg-white rounded-xl border border-sky-200">
+                      {currentClass.students.map((st) => (
+                        <button
+                          key={st.id}
+                          type="button"
+                          onClick={() => setSelectedStudentId(st.id)}
+                          className="px-2.5 py-1 text-xs font-bold rounded-lg bg-sky-50 hover:bg-[#0284C7] hover:text-white text-slate-800 border border-sky-200 cursor-pointer transition-all active:scale-95"
+                        >
+                          {st.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <h3 className="text-xl font-bold text-slate-900">{selectedAssignment.title}</h3>
                 <p className="text-sm text-slate-700 bg-amber-50/70 border border-amber-200 p-3.5 rounded-xl">
@@ -1602,7 +1677,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                       </span>
                     </div>
                     <p className="text-xs text-amber-800 leading-relaxed">
-                      Hệ thống quy định mỗi học sinh chỉ được nộp bài 1 lần duy nhất để đảm bảo tính công bằng và khách quan. Toàn bộ câu trả lời trắc nghiệm, bài viết tự luận và tệp bài làm của em <strong>{currentStudent.name}</strong> ({currentClass.name}) đã được hệ thống lưu trữ và khóa an toàn. Em có thể xem lại bài làm và phiếu kết quả chấm điểm chi tiết ở bên dưới.
+                      Hệ thống quy định mỗi học sinh chỉ được nộp bài 1 lần duy nhất để đảm bảo tính công bằng và khách quan. Toàn bộ câu trả lời trắc nghiệm, bài viết tự luận và tệp bài làm của em <strong>{currentStudent ? currentStudent.name : "Học sinh"}</strong> ({currentClass.name}) đã được hệ thống lưu trữ và khóa an toàn. Em có thể xem lại bài làm và phiếu kết quả chấm điểm chi tiết ở bên dưới.
                     </p>
                   </div>
                 </div>
@@ -1612,7 +1687,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                 /* Theory Quiz & Short Answer NLP Interface — Không chọn trước đáp án, bắt buộc làm hết mới cho nộp */
                 <div className="space-y-6">
                   {activeTheoryMcqs.length > 0 && (() => {
-                    const studentSeed = `${currentStudent.id || currentStudent.studentCode || currentStudent.name}_${selectedAssignment.id}`;
+                    const studentSeed = `${currentStudent?.id || currentStudent?.studentCode || currentStudent?.name || "student"}_${selectedAssignment.id}`;
                     const shuffledMcqMap = buildStudentShuffledMcqMap(
                       activeTheoryMcqs,
                       studentSeed
@@ -1626,7 +1701,7 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
                               Phần I: Trắc nghiệm khách quan — Em hãy tự bấm chọn đáp án cho tất cả các câu hỏi!
                             </h4>
                             <p className="text-[11px] text-slate-500 mt-0.5">
-                              Các phương án A, B, C, D đã được hệ thống xáo trộn riêng cho mã học sinh của em ({currentStudent.name}).
+                              Các phương án A, B, C, D đã được hệ thống xáo trộn riêng cho mã học sinh của em ({currentStudent?.name || "em"}).
                             </p>
                           </div>
                           <span
