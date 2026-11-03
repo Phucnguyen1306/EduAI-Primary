@@ -782,18 +782,35 @@ export function isAssignmentAssignedToClass(
   const asgGrade = String(assignment.grade || "").trim();
   const targetGrade = String(classGrade || asgGrade).trim();
 
-  // Chuẩn hóa số khối (ví dụ: "Lớp 4", "Khối 4", "4" đều trả về "4")
-  const asgGradeNum = asgGrade.match(/\d+/)?.[0] || asgGrade.toLowerCase();
-  const targetGradeNum = targetGrade.match(/\d+/)?.[0] || targetGrade.toLowerCase();
+  // Chuẩn hóa số khối (ví dụ: "Lớp 4", "Khối 4", "4", "4/1" đều trích xuất được số khối "4")
+  const asgGradeNum =
+    asgGrade.match(/\b([345])\b/)?.[1] ||
+    asgGrade.match(/\d+/)?.[0] ||
+    String(assignment.className || "").match(/\b([345])[\/a-zA-Z0-9._-]*/i)?.[1] ||
+    asgGrade.toLowerCase();
+  const targetGradeNum =
+    targetGrade.match(/\b([345])\b/)?.[1] ||
+    targetGrade.match(/\d+/)?.[0] ||
+    String(className || "").match(/\b([345])[\/a-zA-Z0-9._-]*/i)?.[1] ||
+    targetGrade.toLowerCase();
 
-  // Nếu khác khối lớp -> không hiển thị
+  // Nếu khác khối lớp (ví dụ đề Lớp 4 nhưng học sinh Lớp 3) -> không hiển thị
   if (asgGradeNum && targetGradeNum && asgGradeNum !== targetGradeNum) {
     return false;
   }
 
+  // Helper chuẩn hóa mã lớp để so sánh bất chấp cách viết ("Lớp 4/1", "4/1", "4.1", "4_1", "4-1", "4A1")
+  const normalizeClassToken = (str: string): string => {
+    return String(str || "")
+      .toLowerCase()
+      .replace(/^(lớp|khối|lop|khoi)\s*/i, "")
+      .replace(/[\s._-]+/g, "/")
+      .trim();
+  };
+
   const cNameTrimmed = String(className || "").trim();
   const cNameLower = cNameTrimmed.toLowerCase();
-  const cleanStudentClass = cNameLower.replace(/^(lớp|khối)\s*/i, "").trim();
+  const normStudentClass = normalizeClassToken(cNameTrimmed);
 
   const rawClassStr = String(assignment.className || "").trim();
   const rawClassLower = rawClassStr.toLowerCase();
@@ -837,24 +854,22 @@ export function isAssignmentAssignedToClass(
     return true;
   }
 
-  // Helper so khớp chuẩn xác tên lớp (hỗ trợ "4/1" vs "Lớp 4/1", "4A" vs "Lớp 4A", "4/2"...)
   const matchesClass = (candidateName: string): boolean => {
     const cLower = String(candidateName || "").toLowerCase().trim();
     if (!cLower) return false;
-    const cleanCand = cLower.replace(/^(lớp|khối)\s*/i, "").trim();
     if (cLower === cNameLower) return true;
-    if (cleanCand && cleanStudentClass && cleanCand === cleanStudentClass) return true;
-    if (cLower === `lớp ${cleanStudentClass}` || `lớp ${cleanCand}` === cNameLower) return true;
+    const normCand = normalizeClassToken(cLower);
+    if (normCand && normStudentClass && normCand === normStudentClass) return true;
+    if (cLower === `lớp ${normStudentClass}` || `lớp ${normCand}` === cNameLower) return true;
     return false;
   };
 
-  // 2. Nếu targetClassNames có danh sách lớp cụ thể
-  if (targetNames.length > 0) {
-    return targetNames.some((t) => matchesClass(t));
+  // 2. Kiểm tra trong targetClassNames
+  if (targetNames.length > 0 && targetNames.some((t) => matchesClass(t))) {
+    return true;
   }
 
-  // 3. Nếu targetClassNames rỗng nhưng className chuỗi có liệt kê lớp
-  // LƯU Ý QUAN TRỌNG: Chỉ phân tách bằng dấu phẩy (,) hoặc chấm phẩy (;), TUYỆT ĐỐI KHÔNG phân tách bằng gạch chéo (/) vì tên lớp ở Việt Nam là 4/1, 3/2!
+  // 3. Kiểm tra trong chuỗi className (phân tách bằng dấu phẩy hoặc chấm phẩy)
   if (rawClassStr) {
     const classList = rawClassStr
       .split(/[,;]+/)
@@ -866,7 +881,11 @@ export function isAssignmentAssignedToClass(
     }
   }
 
-  // Mặc định: Nếu cùng khối và không có ràng buộc lớp cụ thể thì cho phép học sinh nhận bài
+  // 4. Nếu cùng khối lớp (đã qua bước kiểm tra khối ở trên), cho phép tất cả các lớp trong khối đều nhìn thấy đề để tránh sót lớp khi giáo viên quên tích chọn đủ các lớp trong khối
+  if (asgGradeNum && targetGradeNum && asgGradeNum === targetGradeNum) {
+    return true;
+  }
+
   return targetNames.length === 0;
 }
 

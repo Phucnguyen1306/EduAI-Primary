@@ -366,35 +366,87 @@ export default function App() {
     const silent = typeof silentOrEvent === "boolean" ? silentOrEvent : false;
     if (!silent) setIsRefreshingCloud(true);
     try {
-      const [asgs, subs, cls, st] = await Promise.all([
+      const [asgs, subs, cls, st, codeState] = await Promise.all([
         fetchInitialSupabaseAssignments(),
         fetchInitialSupabaseSubmissions(),
         fetchInitialSupabaseClasses(),
         fetchInitialSupabaseState(),
+        fetchSystemStateFromCode().catch(() => null),
       ]);
 
-      if (Array.isArray(asgs)) {
-        setAssignments(asgs);
-        saveCachedLocalState({ assignments: asgs });
-      } else if (st?.assignments) {
-        setAssignments(st.assignments);
-        saveCachedLocalState({ assignments: st.assignments });
+      const combinedRemoteAssignments = mergeArrayById(
+        Array.isArray(asgs) ? asgs : [],
+        mergeArrayById(
+          Array.isArray(st?.assignments) ? st.assignments : [],
+          Array.isArray(codeState?.assignments) ? codeState.assignments : [],
+          codeState?.deletedIds?.assignments || []
+        ),
+        codeState?.deletedIds?.assignments || []
+      );
+
+      if (combinedRemoteAssignments.length > 0) {
+        setAssignments((prev) => {
+          const next = mergeArrayById(
+            combinedRemoteAssignments,
+            prev,
+            codeState?.deletedIds?.assignments || []
+          );
+          if (JSON.stringify(next) !== JSON.stringify(prev)) {
+            saveCachedLocalState({ assignments: next });
+            return next;
+          }
+          return prev;
+        });
       }
 
-      if (Array.isArray(subs)) {
-        setSubmissions(subs);
-        saveCachedLocalState({ submissions: subs });
-      } else if (st?.submissions) {
-        setSubmissions(st.submissions);
-        saveCachedLocalState({ submissions: st.submissions });
+      const combinedRemoteSubmissions = mergeArrayById(
+        Array.isArray(subs) ? subs : [],
+        mergeArrayById(
+          Array.isArray(st?.submissions) ? st.submissions : [],
+          Array.isArray(codeState?.submissions) ? codeState.submissions : [],
+          codeState?.deletedIds?.submissions || []
+        ),
+        codeState?.deletedIds?.submissions || []
+      );
+
+      if (combinedRemoteSubmissions.length > 0) {
+        setSubmissions((prev) => {
+          const next = mergeArrayById(
+            combinedRemoteSubmissions,
+            prev,
+            codeState?.deletedIds?.submissions || []
+          );
+          if (JSON.stringify(next) !== JSON.stringify(prev)) {
+            saveCachedLocalState({ submissions: next });
+            return next;
+          }
+          return prev;
+        });
       }
 
-      if (Array.isArray(cls) && cls.length > 0) {
-        setClassesList(cls);
-        saveCachedLocalState({ classes: cls });
-      } else if (st?.classes && st.classes.length > 0) {
-        setClassesList(st.classes);
-        saveCachedLocalState({ classes: st.classes });
+      const combinedRemoteClasses = mergeArrayById(
+        Array.isArray(cls) ? cls : [],
+        mergeArrayById(
+          Array.isArray(st?.classes) ? st.classes : [],
+          Array.isArray(codeState?.classes) ? codeState.classes : [],
+          codeState?.deletedIds?.classes || []
+        ),
+        codeState?.deletedIds?.classes || []
+      );
+
+      if (combinedRemoteClasses.length > 0) {
+        setClassesList((prev) => {
+          const next = mergeArrayById(
+            combinedRemoteClasses,
+            prev,
+            codeState?.deletedIds?.classes || []
+          );
+          if (JSON.stringify(next) !== JSON.stringify(prev)) {
+            saveCachedLocalState({ classes: next });
+            return next;
+          }
+          return prev;
+        });
       }
 
       if (!silent) {

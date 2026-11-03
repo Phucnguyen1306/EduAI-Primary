@@ -399,8 +399,8 @@ export function getOrCreateLiveChannel() {
             payload: {
               targetId: requesterId,
               responderId: CLIENT_ID,
-              assignments: snapshot.assignments,
-              submissions: snapshot.submissions,
+              assignments: snapshot.assignments.map(sanitizeAssignmentForBroadcast),
+              submissions: snapshot.submissions.map(sanitizeSubmissionForBroadcast),
               classes: snapshot.classes,
               timestamp: new Date().toISOString(),
             },
@@ -518,39 +518,41 @@ export async function fetchLatestSupabaseUpdates(): Promise<{
   let clsCount = 0;
 
   try {
-    // 1. Kiểm tra cập nhật Đề thi (assignments)
-    const asgs = await fetchInitialSupabaseAssignments();
-    if (asgs !== null && Array.isArray(asgs) && asgs.length > 0) {
-      asgCount = asgs.length;
+    // 1. Kiểm tra cập nhật Đề thi (assignments) từ cả bảng riêng & bảng trạng thái tổng hợp
+    const [asgs, st] = await Promise.all([
+      fetchInitialSupabaseAssignments(),
+      fetchInitialSupabaseState(),
+    ]);
+
+    const mergedAsgsMap = new Map<string, Assignment>();
+    if (st?.assignments && Array.isArray(st.assignments)) {
+      for (const a of st.assignments) {
+        if (a && a.id) mergedAsgsMap.set(a.id, a);
+      }
+    }
+    if (asgs !== null && Array.isArray(asgs)) {
+      for (const a of asgs) {
+        if (a && a.id) mergedAsgsMap.set(a.id, a);
+      }
+    }
+    const combinedAsgs = Array.from(mergedAsgsMap.values());
+
+    if (combinedAsgs.length > 0) {
+      asgCount = combinedAsgs.length;
       const hash =
-        asgs
+        combinedAsgs
           .map(
             (a) =>
               `${a.id}_${(a as any).updated_at || a.title}_${a.targetClassNames?.join(",") || a.className}_${
                 a.checklist?.length || 0
               }_${a.theoryExam?.multipleChoice?.length || 0}`
           )
-          .join("|") + `_len_${asgs.length}`;
+          .join("|") + `_len_${combinedAsgs.length}`;
 
       if (hash !== lastKnownAssignmentHash) {
         lastKnownAssignmentHash = hash;
-        assignmentSubscribers.forEach((cb) => cb(asgs));
-        updateStoredLocalSnapshot({ assignments: asgs });
-      }
-    } else {
-      // Fallback: nếu bảng assignments chưa sẵn sàng hoặc rỗng, kiểm tra eduai_system_state
-      const st = await fetchInitialSupabaseState();
-      if (st?.assignments && Array.isArray(st.assignments) && st.assignments.length > 0) {
-        asgCount = st.assignments.length;
-        const hash =
-          "state_" +
-          st.assignments.map((a) => `${a.id}_${a.title}_${a.className}`).join("|") +
-          `_len_${st.assignments.length}`;
-        if (hash !== lastKnownAssignmentHash) {
-          lastKnownAssignmentHash = hash;
-          assignmentSubscribers.forEach((cb) => cb(st.assignments!));
-          updateStoredLocalSnapshot({ assignments: st.assignments });
-        }
+        assignmentSubscribers.forEach((cb) => cb(combinedAsgs));
+        updateStoredLocalSnapshot({ assignments: combinedAsgs });
       }
     }
 
@@ -807,20 +809,27 @@ export function subscribeSupabaseAssignments(
   getOrCreateLiveChannel();
   assignmentSubscribers.add(onUpdate);
 
-  // Tải dữ liệu ban đầu từ bảng 'assignments', nếu không có thì đọc từ 'eduai_system_state'
-  fetchInitialSupabaseAssignments().then((asgs) => {
-    if (asgs !== null && asgs.length > 0) {
-      onUpdate(asgs);
-      updateStoredLocalSnapshot({ assignments: asgs });
-    } else {
-      fetchInitialSupabaseState().then((state) => {
-        if (state?.assignments && state.assignments.length > 0) {
-          onUpdate(state.assignments);
-          updateStoredLocalSnapshot({ assignments: state.assignments });
+  // Tải dữ liệu ban đầu từ cả bảng 'assignments' và 'eduai_system_state' để đảm bảo không bỏ sót đề
+  Promise.all([fetchInitialSupabaseAssignments(), fetchInitialSupabaseState()]).then(
+    ([asgs, state]) => {
+      const mergedMap = new Map<string, Assignment>();
+      if (state?.assignments && Array.isArray(state.assignments)) {
+        for (const a of state.assignments) {
+          if (a && a.id) mergedMap.set(a.id, a);
         }
-      });
+      }
+      if (asgs !== null && Array.isArray(asgs)) {
+        for (const a of asgs) {
+          if (a && a.id) mergedMap.set(a.id, a);
+        }
+      }
+      const combined = Array.from(mergedMap.values());
+      if (combined.length > 0) {
+        onUpdate(combined);
+        updateStoredLocalSnapshot({ assignments: combined });
+      }
     }
-  });
+  );
 
   return () => {
     assignmentSubscribers.delete(onUpdate);
@@ -917,6 +926,27 @@ function sanitizeSubmissionForBroadcast(sub: StudentSubmission): StudentSubmissi
 }
 
 /**
+ * Làm nhẹ payload đề bài để phát qua WebSocket Supabase Realtime không bị quá giới hạn 256KB
+ * (Nếu có ảnh tải lên từ máy tính dung lượng lớn, các máy nhận được thông báo sẽ tự kéo đầy đủ từ Database hoặc tạo lại hình SVG minh họa tức thì)
+ */
+function sanitizeAssignmentForBroadcast(asg: Assignment): Assignment {
+  if (!asg) return asg;
+  const clone: Assignment = { ...asg };
+  if (clone.theoryExam) {
+    clone.theoryExam = {
+      ...clone.theoryExam,
+      multipleChoice: (clone.theoryExam.multipleChoice || []).map((q) => {
+        if (q.illustrationImageDataUrl && q.illustrationImageDataUrl.length > 15000) {
+          return { ...q, illustrationImageDataUrl: "" };
+        }
+        return q;
+      }),
+    };
+  }
+  return clone;
+}
+
+/**
  * Lưu/Cập nhật một đề bài kiểm tra lên bảng 'assignments' và phát Realtime
  */
 export async function saveAssignmentToSupabase(assignment: Assignment): Promise<void> {
@@ -989,16 +1019,19 @@ export async function saveAssignmentToSupabase(assignment: Assignment): Promise<
     });
   } catch {}
 
+  const safeAsg = sanitizeAssignmentForBroadcast(assignment);
+  const safeNextAsgs = nextAsgs.map(sanitizeAssignmentForBroadcast);
+
   // 2. Phát broadcast qua channel để học sinh và các trình duyệt khác nhận ngay tức thì
   await safeBroadcast("assignments_event", {
     type: "ADD_ASSIGNMENT",
-    assignment,
+    assignment: safeAsg,
     timestamp: nowIso,
   });
 
   await safeBroadcast("assignments_event", {
     type: "ASSIGNMENTS_UPDATED",
-    data: nextAsgs,
+    data: safeNextAsgs,
     timestamp: nowIso,
   });
 

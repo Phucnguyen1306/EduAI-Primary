@@ -117,13 +117,15 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       isAssignmentForClass(a, currentClass.name, currentClass.grade)
     );
     if (directMatches.length > 0) return directMatches;
-    // Fallback: nếu chưa giao riêng lớp này, nhưng có đề cùng khối lớp trong trường
+    // Fallback 1: nếu chưa giao riêng lớp này, nhưng có đề cùng khối lớp trong trường
     const gradeMatches = assignments.filter((a) => {
       const aGradeNum = String(a.grade || "").match(/\d+/)?.[0];
       const cGradeNum = String(currentClass.grade || "").match(/\d+/)?.[0];
       return aGradeNum && cGradeNum && aGradeNum === cGradeNum;
     });
-    return gradeMatches;
+    if (gradeMatches.length > 0) return gradeMatches;
+    // Fallback 2: hiển thị toàn bộ đề hiện có trong hệ thống để học sinh luôn thấy bài
+    return assignments;
   }, [assignments, currentClass]);
 
   const [selectedAssignmentId, setSelectedAssignmentId] = useState<string>("");
@@ -191,6 +193,14 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
     }
   };
 
+  // Tự động đồng bộ ngay khi học sinh mở Cổng Học Sinh để đảm bảo luôn nhìn thấy đề mới nhất
+  useEffect(() => {
+    if (onRefreshData) {
+      onRefreshData();
+    }
+    requestPeerSync().catch(() => {});
+  }, []);
+
   const handleClassChange = (classId: string) => {
     setSelectedClassId(classId);
     // Để trống tên học sinh khi mới chọn lớp để học sinh tự chọn tên của mình
@@ -200,23 +210,34 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       const matchingAsgs = assignments.filter((a) =>
         isAssignmentForClass(a, cls.name, cls.grade)
       );
-      setSelectedAssignmentId(matchingAsgs[0]?.id || "");
+      setSelectedAssignmentId(matchingAsgs[0]?.id || assignments[0]?.id || "");
     } else {
       setSelectedAssignmentId("");
     }
     resetCurrentAttempt();
+    // Gọi quét đồng bộ ngầm ngay khi học sinh chọn lớp để lấy đề mới nhất từ máy Thầy
+    if (onRefreshData) {
+      onRefreshData();
+    }
+    requestPeerSync().catch(() => {});
   };
 
   // Tự động chọn đề kiểm tra khi danh sách đề của lớp thay đổi (ví dụ: Thầy vừa giao đề mới từ máy khác)
   useEffect(() => {
     if (classAssignments.length > 0) {
-      if (!selectedAssignmentId || !classAssignments.some((a) => a.id === selectedAssignmentId)) {
+      if (
+        !selectedAssignmentId ||
+        (!classAssignments.some((a) => a.id === selectedAssignmentId) &&
+          !assignments.some((a) => a.id === selectedAssignmentId))
+      ) {
         setSelectedAssignmentId(classAssignments[0].id);
       }
-    } else {
+    } else if (assignments.length > 0 && !selectedAssignmentId) {
+      setSelectedAssignmentId(assignments[0].id);
+    } else if (assignments.length === 0) {
       setSelectedAssignmentId("");
     }
-  }, [classAssignments, selectedAssignmentId]);
+  }, [classAssignments, assignments, selectedAssignmentId]);
 
   // Bắt sự kiện thời gian thực khi có bài mới vừa được Thầy giao từ máy khác
   const [newAssignmentAlert, setNewAssignmentAlert] = useState<string | null>(null);
